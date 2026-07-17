@@ -123,6 +123,14 @@ tbody tr.row-section td {
 }
 tbody tr.row-section td:first-child { text-transform: uppercase; }
 
+/* ── Section label ── */
+.section-label {
+  font-size: 12px; font-weight: 650; color: var(--muted); letter-spacing: 0.03em;
+  text-transform: uppercase; margin: 24px 0 8px; padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.section-label:first-child { margin-top: 0; }
+
 /* ── No data ── */
 .no-data {
   text-align: center; padding: 60px 20px; color: var(--faint); font-size: 12.5px;
@@ -188,6 +196,7 @@ const WORKFLOWS = [
 
 const COLS_HEALTH = ['Today','T-1','T-2','T-3','T-4','T-5','T-6','T-7','Average','Median','P90'];
 const COLS_FUNNEL = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Average','Median','P90'];
+const COLS_RATES  = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'];
 
 let activeKey = null;
 
@@ -245,7 +254,18 @@ function loadMetric(key, wfName, type) {
   }
 
   const cols = key.endsWith('_funnel') ? COLS_FUNNEL : COLS_HEALTH;
-  renderTable(rows, cols);
+  const body = document.getElementById('mainBody');
+  let html = buildTableHtml(rows, cols);
+
+  if (key === 'b2i_health') {
+    const rates = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['b2i_health_rates'] : null;
+    if (rates && rates.length > 0) {
+      html += '<div class="section-label">Conversion Rates (%)</div>';
+      html += buildTableHtml(rates, COLS_RATES, true);
+    }
+  }
+
+  body.innerHTML = html;
 }
 
 function fmt(val) {
@@ -256,12 +276,11 @@ function fmt(val) {
   return n.toLocaleString('en-IN', { maximumFractionDigits: 1 });
 }
 
-function renderTable(rows, cols) {
-  const body = document.getElementById('mainBody');
+function buildTableHtml(rows, cols, pct) {
   let html = '<div class="table-wrap"><table><thead><tr>';
   html += '<th>Metric</th>';
   cols.forEach(c => {
-    const cls = ['Average','Median','P90'].includes(c) ? ' class="col-stat"' : '';
+    const cls = ['Average','Mean','Median','P90'].includes(c) ? ' class="col-stat"' : '';
     html += '<th' + cls + '>' + c + '</th>';
   });
   html += '</tr></thead><tbody>';
@@ -277,13 +296,13 @@ function renderTable(rows, cols) {
     html += '<td>' + name + '</td>';
     cols.forEach(c => {
       const v = row[c] ?? row[c.toUpperCase()] ?? '';
-      html += '<td>' + fmt(v) + '</td>';
+      html += '<td>' + fmt(v) + (pct && v !== null && v !== undefined && v !== '' ? '%' : '') + '</td>';
     });
     html += '</tr>';
   }
 
   html += '</tbody></table></div>';
-  body.innerHTML = html;
+  return html;
 }
 
 buildSidebar();
