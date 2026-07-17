@@ -1,0 +1,295 @@
+<title>CSP Metric Tracker</title>
+<style>
+:root {
+  --ground: #F5F6F8; --surface: #FFFFFF;
+  --sidebar-bg: #FFFFFF; --sidebar-border: #E5E7EB;
+  --ink: #111827; --muted: #6B7280; --faint: #9CA3AF; --border: #E5E7EB; --border2: #F3F4F6;
+  --accent: #2563EB; --accent-soft: #EFF6FF; --accent-ink: #1D4ED8;
+  --good: #059669; --warn: #D97706; --bad: #DC2626;
+  --sidebar-ink: #111827; --sidebar-muted: #6B7280;
+  --sidebar-hover: #F3F4F6; --sidebar-active: #EFF6FF;
+  --sidebar-accent: #2563EB;
+  --row-alt: #F9FAFB; --row-hover: #F3F4F6;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body { font-family: var(--sans); color: var(--ink); background: var(--ground); display: flex; -webkit-font-smoothing: antialiased; }
+
+/* ── Sidebar ── */
+.sidebar {
+  width: 248px; min-width: 248px; height: 100vh; overflow-y: auto; background: var(--sidebar-bg);
+  display: flex; flex-direction: column; position: sticky; top: 0;
+  border-right: 1px solid var(--sidebar-border);
+  scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+}
+.sidebar-header {
+  padding: 18px 16px 14px; border-bottom: 1px solid var(--sidebar-border);
+}
+.sidebar-logo {
+  font-size: 14px; font-weight: 700; color: var(--ink); letter-spacing: -0.01em;
+}
+.sidebar-sub {
+  font-size: 10.5px; color: var(--muted); margin-top: 2px; letter-spacing: 0.04em; text-transform: uppercase; font-weight: 600;
+}
+.sidebar-nav { flex: 1; padding: 8px 0; }
+
+.wf-group { margin-bottom: 1px; }
+.wf-toggle {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 16px;
+  background: none; border: none; color: var(--sidebar-ink); font: inherit; font-size: 13px;
+  font-weight: 560; cursor: pointer; text-align: left; transition: background 0.1s;
+}
+.wf-toggle:hover { background: var(--sidebar-hover); }
+.wf-toggle .chevron {
+  width: 14px; height: 14px; transition: transform 0.15s ease; flex-shrink: 0; opacity: 0.4;
+}
+.wf-group.open > .wf-toggle .chevron { transform: rotate(90deg); opacity: 0.6; }
+.wf-children { display: none; }
+.wf-group.open > .wf-children { display: block; }
+
+.wf-item {
+  display: flex; align-items: center; gap: 7px; padding: 6px 16px 6px 40px;
+  font-size: 12px; color: var(--sidebar-muted); cursor: pointer; border-left: 2px solid transparent;
+  transition: all 0.1s; user-select: none;
+}
+.wf-item:hover { color: var(--sidebar-ink); background: var(--sidebar-hover); }
+.wf-item.active {
+  color: var(--sidebar-accent); background: var(--sidebar-active);
+  border-left-color: var(--sidebar-accent); font-weight: 600;
+}
+.wf-item .dot-health { width: 5px; height: 5px; border-radius: 50%; background: var(--good); flex-shrink: 0; }
+.wf-item .dot-efficiency { width: 5px; height: 5px; border-radius: 50%; background: var(--warn); flex-shrink: 0; }
+.wf-item .dot-funnel { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+
+.sidebar-footer {
+  padding: 12px 16px; border-top: 1px solid var(--sidebar-border);
+  font-size: 10.5px; color: var(--faint); line-height: 1.5;
+}
+
+/* ── Main ── */
+.main { flex: 1; min-width: 0; overflow-y: auto; height: 100vh; }
+.main-header {
+  padding: 18px 24px 14px; border-bottom: 1px solid var(--border);
+  background: var(--surface); position: sticky; top: 0; z-index: 10;
+}
+.breadcrumb {
+  font-size: 10.5px; letter-spacing: 0.05em; text-transform: uppercase; font-weight: 600;
+  color: var(--faint); margin-bottom: 4px; display: flex; align-items: center; gap: 5px;
+}
+.breadcrumb .sep { opacity: 0.35; }
+.breadcrumb .bc-active { color: var(--accent-ink); }
+.main-title-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.main-title { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
+.header-actions { display: flex; align-items: center; gap: 10px; }
+.refresh-ts {
+  font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums;
+}
+
+.main-body { padding: 18px 24px 36px; }
+
+/* ── Welcome state ── */
+.welcome {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: 50vh; text-align: center; gap: 12px;
+}
+.welcome h2 { font-size: 16px; font-weight: 600; color: var(--muted); }
+.welcome p { font-size: 12.5px; color: var(--faint); max-width: 34ch; line-height: 1.55; }
+
+/* ── Table ── */
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+thead th {
+  font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; font-weight: 650;
+  color: var(--muted); padding: 9px 10px; text-align: right; white-space: nowrap;
+  border-bottom: 2px solid var(--border); background: var(--surface); position: sticky; top: 0;
+}
+thead th:first-child { text-align: left; min-width: 260px; }
+thead th.col-stat { color: var(--accent-ink); border-bottom-color: var(--accent); }
+tbody td {
+  padding: 7px 10px; text-align: right; font-variant-numeric: tabular-nums;
+  border-top: 1px solid var(--border2); white-space: nowrap;
+}
+tbody td:first-child {
+  text-align: left; font-weight: 500; white-space: normal; min-width: 260px;
+  color: var(--ink); font-size: 12px;
+}
+tbody tr:nth-child(even) { background: var(--row-alt); }
+tbody tr:hover { background: var(--row-hover); }
+tbody tr.row-section td {
+  background: var(--accent-soft); font-weight: 650; font-size: 11px;
+  letter-spacing: 0.03em; color: var(--accent-ink); border-top: 2px solid var(--border);
+}
+tbody tr.row-section td:first-child { text-transform: uppercase; }
+
+/* ── No data ── */
+.no-data {
+  text-align: center; padding: 60px 20px; color: var(--faint); font-size: 12.5px;
+}
+
+/* ── Responsive ── */
+@media (max-width: 860px) {
+  .sidebar { width: 210px; min-width: 210px; }
+  .main-header { padding: 14px 16px 10px; }
+  .main-body { padding: 14px 16px 28px; }
+  thead th:first-child, tbody td:first-child { min-width: 180px; }
+}
+@media (max-width: 640px) {
+  body { flex-direction: column; }
+  .sidebar { width: 100%; min-width: 100%; height: auto; max-height: 50vh; position: relative; }
+  .main { height: auto; }
+}
+</style>
+
+<div class="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo">CSP Metric Tracker</div>
+    <div class="sidebar-sub">Wiom Operations</div>
+  </div>
+  <nav class="sidebar-nav" id="sidebarNav"></nav>
+  <div class="sidebar-footer">
+    Refreshed daily<br>
+    <span id="footerTs">&mdash;</span>
+  </div>
+</div>
+
+<div class="main">
+  <div class="main-header">
+    <div class="breadcrumb" id="breadcrumb">
+      <span>Workflows</span>
+    </div>
+    <div class="main-title-row">
+      <h1 class="main-title" id="mainTitle">CSP Metric Tracker</h1>
+      <div class="header-actions">
+        <span class="refresh-ts" id="refreshTs"></span>
+      </div>
+    </div>
+  </div>
+  <div class="main-body" id="mainBody">
+    <div class="welcome">
+      <h2>Select a workflow</h2>
+      <p>Pick a workflow and metric type from the sidebar to view the daily health or efficiency breakdown.</p>
+    </div>
+  </div>
+</div>
+
+<script src="workflow_data.js"></script>
+<script>
+const WORKFLOWS = [
+  { id: 'b2i',              name: 'Booking to Install', health: 'b2i_health',              efficiency: 'b2i_efficiency',             funnel: 'b2i_funnel' },
+  { id: 'service_tickets',  name: 'Service Tickets',    health: 'service_tickets_health',  efficiency: 'service_tickets_efficiency' },
+  { id: 'pickup_tickets',   name: 'Pickup Tickets',     health: 'pickup_tickets_health',   efficiency: 'pickup_tickets_efficiency' },
+  { id: 'isp_recharge',     name: 'ISP Recharge',       health: 'isp_recharge_health',     efficiency: 'isp_recharge_efficiency' },
+  { id: 'quality',          name: 'Quality',            health: 'quality_health',          efficiency: 'quality_efficiency' },
+  { id: 'device_ordering',  name: 'Device Ordering',    health: 'device_ordering_health',  efficiency: 'device_ordering_efficiency' },
+  { id: 'earnings',         name: 'Earnings',           health: 'earnings_health',         efficiency: 'earnings_efficiency' },
+];
+
+const COLS_HEALTH = ['Today','T-1','T-2','T-3','T-4','T-5','T-6','T-7','Average','Median','P90'];
+const COLS_FUNNEL = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Average','Median','P90'];
+
+let activeKey = null;
+
+function buildSidebar() {
+  const nav = document.getElementById('sidebarNav');
+  nav.innerHTML = WORKFLOWS.map(wf => `
+    <div class="wf-group" data-wf="${wf.id}">
+      <button class="wf-toggle" onclick="toggleGroup('${wf.id}')">
+        <svg class="chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M6 4l4 4-4 4"/>
+        </svg>
+        <span>${wf.name}</span>
+      </button>
+      <div class="wf-children">
+        <div class="wf-item" data-key="${wf.health}" onclick="loadMetric('${wf.health}', '${wf.name}', 'Health')">
+          <span class="dot-health"></span> Health
+        </div>
+        <div class="wf-item" data-key="${wf.efficiency}" onclick="loadMetric('${wf.efficiency}', '${wf.name}', 'Efficiency')">
+          <span class="dot-efficiency"></span> Efficiency
+        </div>
+        ${wf.funnel ? '<div class="wf-item" data-key="' + wf.funnel + '" onclick="loadMetric(\'' + wf.funnel + '\', \'' + wf.name + '\', \'Funnel\')"><span class="dot-funnel"></span> Funnel</div>' : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+function toggleGroup(wfId) {
+  const group = document.querySelector(`.wf-group[data-wf="${wfId}"]`);
+  if (group) group.classList.toggle('open');
+}
+
+function loadMetric(key, wfName, type) {
+  document.querySelectorAll('.wf-item').forEach(el => el.classList.remove('active'));
+  const item = document.querySelector(`.wf-item[data-key="${key}"]`);
+  if (item) item.classList.add('active');
+
+  const parent = item?.closest('.wf-group');
+  if (parent && !parent.classList.contains('open')) parent.classList.add('open');
+
+  activeKey = key;
+
+  document.getElementById('breadcrumb').innerHTML = `
+    <span>Workflows</span><span class="sep">/</span>
+    <span>${wfName}</span><span class="sep">/</span>
+    <span class="bc-active">${type}</span>
+  `;
+  document.getElementById('mainTitle').textContent = wfName + ' — ' + type;
+
+  const rows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[key] : null;
+
+  if (!rows || rows.length === 0) {
+    document.getElementById('mainBody').innerHTML =
+      '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
+    return;
+  }
+
+  const cols = key.endsWith('_funnel') ? COLS_FUNNEL : COLS_HEALTH;
+  renderTable(rows, cols);
+}
+
+function fmt(val) {
+  if (val === null || val === undefined || val === '') return '—';
+  const n = Number(val);
+  if (isNaN(n)) return String(val);
+  if (Number.isInteger(n)) return n.toLocaleString('en-IN');
+  return n.toLocaleString('en-IN', { maximumFractionDigits: 1 });
+}
+
+function renderTable(rows, cols) {
+  const body = document.getElementById('mainBody');
+  let html = '<div class="table-wrap"><table><thead><tr>';
+  html += '<th>Metric</th>';
+  cols.forEach(c => {
+    const cls = ['Average','Median','P90'].includes(c) ? ' class="col-stat"' : '';
+    html += '<th' + cls + '>' + c + '</th>';
+  });
+  html += '</tr></thead><tbody>';
+
+  for (const row of rows) {
+    const name = row.METRIC_NAME || row.metric_name || '';
+    const isSection = name.startsWith('---');
+    if (isSection) {
+      html += '<tr class="row-section"><td colspan="' + (cols.length + 1) + '">' + name.replace(/^-+\s*/, '') + '</td></tr>';
+      continue;
+    }
+    html += '<tr>';
+    html += '<td>' + name + '</td>';
+    cols.forEach(c => {
+      const v = row[c] ?? row[c.toUpperCase()] ?? '';
+      html += '<td>' + fmt(v) + '</td>';
+    });
+    html += '</tr>';
+  }
+
+  html += '</tbody></table></div>';
+  body.innerHTML = html;
+}
+
+buildSidebar();
+
+if (typeof WORKFLOW_REFRESH_TS !== 'undefined' && WORKFLOW_REFRESH_TS !== 'not yet refreshed') {
+  document.getElementById('refreshTs').textContent = 'Last refresh: ' + WORKFLOW_REFRESH_TS;
+  document.getElementById('footerTs').textContent = WORKFLOW_REFRESH_TS;
+}
+</script>
