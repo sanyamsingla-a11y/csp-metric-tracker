@@ -266,6 +266,15 @@ function loadMetric(key, wfName, type) {
     }
   }
 
+  if (key === 'b2i_efficiency') {
+    const counts = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['b2i_efficiency_counts'] : null;
+    if (counts && counts.length > 0) {
+      html = buildTableHtml(counts, COLS_RATES, false) +
+             '<div class="section-label">Conversion Rates (%)</div>' +
+             html;
+    }
+  }
+
   body.innerHTML = html;
 }
 
