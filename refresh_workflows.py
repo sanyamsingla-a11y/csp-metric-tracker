@@ -804,21 +804,21 @@ all_candidates AS (
 ),
 ct_events AS (
     SELECT
-        JSON_EXTRACT_PATH_TEXT(PROPERTIES, 'execution_id')                              AS execution_id,
-        MAX(CASE WHEN EVENT_NAME = 'install_task_created'                               THEN 1 ELSE 0 END) AS pn_sent,
+        JSON_EXTRACT_PATH_TEXT(PROPERTIES, 'execution_id')                               AS execution_id,
+        MAX(CASE WHEN EVENT_NAME = 'install_task_created'                                THEN 1 ELSE 0 END) AS pn_sent,
         MAX(CASE WHEN EVENT_NAME = 'pn_delivered'
                   AND JSON_EXTRACT_PATH_TEXT(PROPERTIES,'pn_type') = 'ES_INSTALL_CANDIDATE_CREATED'
-                                                                                        THEN 1 ELSE 0 END) AS pn_delivered,
+                                                                                         THEN 1 ELSE 0 END) AS pn_delivered,
         MAX(CASE WHEN EVENT_NAME = 'pn_clicked'
                   AND JSON_EXTRACT_PATH_TEXT(PROPERTIES,'pn_type') = 'ES_INSTALL_CANDIDATE_CREATED'
-                                                                                        THEN 1 ELSE 0 END) AS pn_clicked,
+                                                                                         THEN 1 ELSE 0 END) AS pn_clicked,
         MAX(CASE WHEN EVENT_NAME = 'fpn_delivered'
                   AND JSON_EXTRACT_PATH_TEXT(PROPERTIES,'pn_type') = 'ES_INSTALL_CANDIDATE_CREATED'
-                                                                                        THEN 1 ELSE 0 END) AS fpn_delivered,
+                                                                                         THEN 1 ELSE 0 END) AS fpn_delivered,
         MAX(CASE WHEN EVENT_NAME = 'fpn_action_taken'
                   AND JSON_EXTRACT_PATH_TEXT(PROPERTIES,'pn_type') = 'ES_INSTALL_CANDIDATE_CREATED'
-                                                                                        THEN 1 ELSE 0 END) AS fpn_action_taken,
-        MAX(CASE WHEN EVENT_NAME = 'install_candidate_opened'                           THEN 1 ELSE 0 END) AS install_candidate_opened
+                                                                                         THEN 1 ELSE 0 END) AS fpn_action_taken,
+        MAX(CASE WHEN EVENT_NAME = 'install_candidate_opened'                            THEN 1 ELSE 0 END) AS install_candidate_opened
     FROM PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA
     WHERE JSON_EXTRACT_PATH_TEXT(PROPERTIES, 'execution_id') IS NOT NULL
       AND JSON_EXTRACT_PATH_TEXT(PROPERTIES, 'execution_id') != ''
@@ -827,14 +827,14 @@ ct_events AS (
 candidate_level AS (
     SELECT
         ac.booking_date,
-        COALESCE(ct.pn_sent, 0)                                                                        AS pn_sent,
-        COALESCE(ct.pn_delivered, 0)                                                                   AS pn_delivered,
-        CASE WHEN COALESCE(ct.pn_delivered,0)=1 AND COALESCE(ct.pn_clicked,0)=1      THEN 1 ELSE 0 END AS pn_clicked,
-        COALESCE(ct.fpn_delivered, 0)                                                                  AS fpn_delivered,
-        CASE WHEN COALESCE(ct.fpn_delivered,0)=1 AND COALESCE(ct.fpn_action_taken,0)=1 THEN 1 ELSE 0 END AS fpn_action_taken,
-        COALESCE(ct.install_candidate_opened, 0)                                                       AS drilldown_open,
+        COALESCE(ct.pn_sent, 0)                                                                           AS pn_sent,
+        COALESCE(ct.pn_delivered, 0)                                                                      AS pn_delivered,
+        CASE WHEN COALESCE(ct.pn_delivered,0)=1 AND COALESCE(ct.pn_clicked,0)=1         THEN 1 ELSE 0 END AS pn_clicked,
+        COALESCE(ct.fpn_delivered, 0)                                                                     AS fpn_delivered,
+        CASE WHEN COALESCE(ct.fpn_delivered,0)=1 AND COALESCE(ct.fpn_action_taken,0)=1  THEN 1 ELSE 0 END AS fpn_action_taken,
+        COALESCE(ct.install_candidate_opened, 0)                                                          AS drilldown_open,
         CASE WHEN COALESCE(ct.fpn_delivered,0)=1
-              OR  COALESCE(ct.install_candidate_opened,0)=1                           THEN 1 ELSE 0 END AS install_task_open,
+              OR  COALESCE(ct.install_candidate_opened,0)=1                              THEN 1 ELSE 0 END AS install_task_open,
         CASE WHEN ac.CURRENT_STATE = 'DECLINED'       THEN 1 ELSE 0 END AS slot_declined,
         CASE WHEN ac.PROPOSED_SLOT_DATE IS NOT NULL   THEN 1 ELSE 0 END AS slot_proposed,
         CASE WHEN ac.CONFIRMED_SLOT_AT IS NOT NULL    THEN 1 ELSE 0 END AS slot_confirmed,
@@ -854,12 +854,12 @@ candidate_level AS (
         CASE WHEN ac.PROPOSED_SLOT_DATE IS NULL
               AND ac.P41_DEADLINE_AT IS NOT NULL
               AND ac.P41_DEADLINE_AT < CURRENT_TIMESTAMP
-              AND ac.CURRENT_STATE = 'CANCELLED_BY_UPSTREAM'              THEN 1 ELSE 0 END AS p41_timeout,
+              AND ac.CURRENT_STATE = 'CANCELLED_BY_UPSTREAM' THEN 1 ELSE 0 END AS p41_timeout,
         CASE WHEN ac.CONFIRMED_SLOT_AT IS NOT NULL
               AND ac.P74_DEADLINE_AT IS NOT NULL
               AND ac.P74_DEADLINE_AT < CURRENT_TIMESTAMP
               AND COALESCE(ac.COMPLETED_STEP,0) < 8
-              AND ac.CURRENT_STATE = 'CANCELLED_BY_UPSTREAM'              THEN 1 ELSE 0 END AS p74_timeout
+              AND ac.CURRENT_STATE = 'CANCELLED_BY_UPSTREAM' THEN 1 ELSE 0 END AS p74_timeout
     FROM all_candidates ac
     LEFT JOIN ct_events ct ON ct.execution_id = ac.EXECUTION_CANDIDATE_ID
 ),
@@ -898,61 +898,63 @@ daily_cand AS (
 rates_joined AS (
     SELECT
         cd.booking_date,
-        cd.pn_clicked         * 1.0 / NULLIF(cd.pn_delivered, 0)       AS pn_click_rate,
-        cd.fpn_delivered      * 1.0 / NULLIF(cd.total_candidates, 0)   AS fpn_delivery_rate,
-        cd.fpn_action_taken   * 1.0 / NULLIF(cd.fpn_delivered, 0)      AS fpn_action_rate,
-        cd.drilldown_open     * 1.0 / NULLIF(cd.total_candidates, 0)   AS drilldown_open_rate,
-        cd.install_task_open  * 1.0 / NULLIF(cd.total_candidates, 0)   AS task_open_rate,
+        cd.pn_delivered       * 1.0 / NULLIF(cd.pn_sent, 0)           AS pn_delivery_rate,
+        cd.pn_clicked         * 1.0 / NULLIF(cd.pn_delivered, 0)      AS pn_click_rate,
+        cd.fpn_delivered      * 1.0 / NULLIF(cd.total_candidates, 0)  AS fpn_delivery_rate,
+        cd.fpn_action_taken   * 1.0 / NULLIF(cd.fpn_delivered, 0)     AS fpn_action_rate,
+        cd.drilldown_open     * 1.0 / NULLIF(cd.total_candidates, 0)  AS drilldown_open_rate,
+        cd.install_task_open  * 1.0 / NULLIF(cd.total_candidates, 0)  AS task_open_rate,
         (cd.slot_proposed + cd.slot_declined) * 1.0 / NULLIF(cd.install_task_open, 0) AS response_rate,
-        cd.slot_declined      * 1.0 / NULLIF(cd.install_task_open, 0)  AS task_decline_rate,
-        cd.p41_timeout        * 1.0 / NULLIF(cd.total_candidates, 0)   AS p41_rate_l2,
-        cd.slot_proposed      * 1.0 / NULLIF(cd.install_task_open, 0)  AS slot_proposed_rate,
-        cd.slot_confirmed     * 1.0 / NULLIF(cd.slot_proposed, 0)      AS slot_confirmed_rate,
-        cd.tech_assigned      * 1.0 / NULLIF(cd.slot_confirmed, 0)     AS tech_assigned_rate,
-        cd.step_selfie        * 1.0 / NULLIF(cd.tech_assigned, 0)      AS arrival_rate,
-        cd.step_aadhaar       * 1.0 / NULLIF(cd.step_selfie, 0)        AS aadhaar_rate,
-        cd.step_fee           * 1.0 / NULLIF(cd.step_aadhaar, 0)       AS fee_rate,
-        cd.step_shared        * 1.0 / NULLIF(cd.step_fee, 0)           AS isp_creation_rate,
-        cd.step_conn_info     * 1.0 / NULLIF(cd.step_shared, 0)        AS device_id_rate,
-        cd.step_device_photo  * 1.0 / NULLIF(cd.step_conn_info, 0)     AS device_photo_rate,
-        cd.step_speed_test    * 1.0 / NULLIF(cd.step_device_photo, 0)  AS speed_test_rate,
-        cd.step_otp_verified  * 1.0 / NULLIF(cd.step_speed_test, 0)    AS happy_code_rate,
-        cd.step_rating        * 1.0 / NULLIF(cd.step_otp_verified, 0)  AS happy_code_entered_rate,
-        cd.install_failed     * 1.0 / NULLIF(cd.total_candidates, 0)   AS install_fail_rate,
-        cd.cancelled_cx       * 1.0 / NULLIF(cd.total_candidates, 0)   AS cancelled_cx_rate,
-        cd.cancelled_upstream * 1.0 / NULLIF(cd.total_candidates, 0)   AS cancelled_upstream_rate,
-        cd.p74_timeout        * 1.0 / NULLIF(cd.slot_proposed, 0)      AS p74_rate_l2
+        cd.slot_declined      * 1.0 / NULLIF(cd.install_task_open, 0) AS task_decline_rate,
+        cd.p41_timeout        * 1.0 / NULLIF(cd.total_candidates, 0)  AS p41_rate_l2,
+        cd.slot_proposed      * 1.0 / NULLIF(cd.install_task_open, 0) AS slot_proposed_rate,
+        cd.slot_confirmed     * 1.0 / NULLIF(cd.slot_proposed, 0)     AS slot_confirmed_rate,
+        cd.tech_assigned      * 1.0 / NULLIF(cd.slot_confirmed, 0)    AS tech_assigned_rate,
+        cd.step_selfie        * 1.0 / NULLIF(cd.tech_assigned, 0)     AS arrival_rate,
+        cd.step_aadhaar       * 1.0 / NULLIF(cd.step_selfie, 0)       AS aadhaar_rate,
+        cd.step_fee           * 1.0 / NULLIF(cd.step_aadhaar, 0)      AS fee_rate,
+        cd.step_shared        * 1.0 / NULLIF(cd.step_fee, 0)          AS isp_creation_rate,
+        cd.step_conn_info     * 1.0 / NULLIF(cd.step_shared, 0)       AS device_id_rate,
+        cd.step_device_photo  * 1.0 / NULLIF(cd.step_conn_info, 0)    AS device_photo_rate,
+        cd.step_speed_test    * 1.0 / NULLIF(cd.step_device_photo, 0) AS speed_test_rate,
+        cd.step_otp_verified  * 1.0 / NULLIF(cd.step_speed_test, 0)   AS happy_code_rate,
+        cd.step_rating        * 1.0 / NULLIF(cd.step_otp_verified, 0) AS happy_code_entered_rate,
+        cd.install_failed     * 1.0 / NULLIF(cd.total_candidates, 0)  AS install_fail_rate,
+        cd.cancelled_cx       * 1.0 / NULLIF(cd.total_candidates, 0)  AS cancelled_cx_rate,
+        cd.cancelled_upstream * 1.0 / NULLIF(cd.total_candidates, 0)  AS cancelled_upstream_rate,
+        cd.p74_timeout        * 1.0 / NULLIF(cd.slot_proposed, 0)     AS p74_rate_l2
     FROM daily_cand cd
     JOIN daily_conn dc ON dc.booking_date = cd.booking_date
 ),
 rates_long AS (
-    SELECT 1  AS sort_ord, 'Install PN Click Rate'                          AS metric, booking_date, pn_click_rate             AS rate FROM rates_joined
-    UNION ALL SELECT 2,  'FPN Delivery Rate (/Task Created)',               booking_date, fpn_delivery_rate      FROM rates_joined
-    UNION ALL SELECT 3,  'FPN Action Taken Rate (/FPN Delivered)',          booking_date, fpn_action_rate        FROM rates_joined
-    UNION ALL SELECT 4,  'Drilldown Open Rate',                             booking_date, drilldown_open_rate    FROM rates_joined
-    UNION ALL SELECT 5,  'Task Open Rate',                                  booking_date, task_open_rate         FROM rates_joined
-    UNION ALL SELECT 6,  'Response Rate ((Proposed+Declined)/Task Open)',   booking_date, response_rate          FROM rates_joined
-    UNION ALL SELECT 7,  'Task Decline Rate',                               booking_date, task_decline_rate      FROM rates_joined
-    UNION ALL SELECT 8,  'P41 Timeout Rate (L2: /Task Created)',            booking_date, p41_rate_l2            FROM rates_joined
-    UNION ALL SELECT 9,  'Slot Proposed Rate',                              booking_date, slot_proposed_rate     FROM rates_joined
-    UNION ALL SELECT 10, 'Slot Confirmed Rate',                             booking_date, slot_confirmed_rate    FROM rates_joined
-    UNION ALL SELECT 11, 'Technician Assignment Rate',                      booking_date, tech_assigned_rate     FROM rates_joined
-    UNION ALL SELECT 12, 'Technician Arrival Rate',                         booking_date, arrival_rate           FROM rates_joined
-    UNION ALL SELECT 13, 'Aadhaar Submitted Rate',                          booking_date, aadhaar_rate           FROM rates_joined
-    UNION ALL SELECT 14, 'SD Fee Submitted Rate',                           booking_date, fee_rate               FROM rates_joined
-    UNION ALL SELECT 15, 'ISP Account Creation Rate',                       booking_date, isp_creation_rate      FROM rates_joined
-    UNION ALL SELECT 16, 'Device ID Entry Rate',                            booking_date, device_id_rate         FROM rates_joined
-    UNION ALL SELECT 17, 'Device Photo Rate',                               booking_date, device_photo_rate      FROM rates_joined
-    UNION ALL SELECT 18, 'Speed Test Rate',                                 booking_date, speed_test_rate        FROM rates_joined
-    UNION ALL SELECT 19, 'Happy Code Received Rate',                        booking_date, happy_code_rate        FROM rates_joined
-    UNION ALL SELECT 20, 'Happy Code Entered Rate',                         booking_date, happy_code_entered_rate FROM rates_joined
-    UNION ALL SELECT 21, 'Install Fail Reported Rate',                      booking_date, install_fail_rate      FROM rates_joined
-    UNION ALL SELECT 22, 'Cancelled by Customer Rate',                      booking_date, cancelled_cx_rate      FROM rates_joined
-    UNION ALL SELECT 23, 'Cancelled by Upstream Rate',                      booking_date, cancelled_upstream_rate FROM rates_joined
-    UNION ALL SELECT 24, 'P74 Timeout Rate (L2: /Slot Proposed)',           booking_date, p74_rate_l2            FROM rates_joined
+    SELECT 1  AS sort_ord, 'Install PN Delivery Rate (/Task Created)'     AS metric_name, booking_date, pn_delivery_rate        AS rate FROM rates_joined
+    UNION ALL SELECT 2,  'Install PN Click Rate (/PN Delivered)',          booking_date, pn_click_rate           FROM rates_joined
+    UNION ALL SELECT 3,  'FPN Delivery Rate (/Task Created)',              booking_date, fpn_delivery_rate       FROM rates_joined
+    UNION ALL SELECT 4,  'FPN Action Taken Rate (/FPN Delivered)',         booking_date, fpn_action_rate         FROM rates_joined
+    UNION ALL SELECT 5,  'Drilldown Open Rate',                            booking_date, drilldown_open_rate     FROM rates_joined
+    UNION ALL SELECT 6,  'Task Open Rate',                                 booking_date, task_open_rate          FROM rates_joined
+    UNION ALL SELECT 7,  'Response Rate ((Proposed+Declined)/Task Open)',  booking_date, response_rate           FROM rates_joined
+    UNION ALL SELECT 8,  'Task Decline Rate',                              booking_date, task_decline_rate       FROM rates_joined
+    UNION ALL SELECT 9,  'P41 Timeout Rate (L2: /Task Created)',           booking_date, p41_rate_l2             FROM rates_joined
+    UNION ALL SELECT 10, 'Slot Proposed Rate',                             booking_date, slot_proposed_rate      FROM rates_joined
+    UNION ALL SELECT 11, 'Slot Confirmed Rate',                            booking_date, slot_confirmed_rate     FROM rates_joined
+    UNION ALL SELECT 12, 'Technician Assignment Rate',                     booking_date, tech_assigned_rate      FROM rates_joined
+    UNION ALL SELECT 13, 'Technician Arrival Rate',                        booking_date, arrival_rate            FROM rates_joined
+    UNION ALL SELECT 14, 'Aadhaar Submitted Rate',                         booking_date, aadhaar_rate            FROM rates_joined
+    UNION ALL SELECT 15, 'SD Fee Submitted Rate',                          booking_date, fee_rate                FROM rates_joined
+    UNION ALL SELECT 16, 'ISP Account Creation Rate',                      booking_date, isp_creation_rate       FROM rates_joined
+    UNION ALL SELECT 17, 'Device ID Entry Rate',                           booking_date, device_id_rate          FROM rates_joined
+    UNION ALL SELECT 18, 'Device Photo Rate',                              booking_date, device_photo_rate       FROM rates_joined
+    UNION ALL SELECT 19, 'Speed Test Rate',                                booking_date, speed_test_rate         FROM rates_joined
+    UNION ALL SELECT 20, 'Happy Code Received Rate',                       booking_date, happy_code_rate         FROM rates_joined
+    UNION ALL SELECT 21, 'Happy Code Entered Rate',                        booking_date, happy_code_entered_rate FROM rates_joined
+    UNION ALL SELECT 22, 'Install Fail Reported Rate',                     booking_date, install_fail_rate       FROM rates_joined
+    UNION ALL SELECT 23, 'Cancelled by Customer Rate',                     booking_date, cancelled_cx_rate       FROM rates_joined
+    UNION ALL SELECT 24, 'Cancelled by Upstream Rate',                     booking_date, cancelled_upstream_rate FROM rates_joined
+    UNION ALL SELECT 25, 'P74 Timeout Rate (L2: /Slot Proposed)',          booking_date, p74_rate_l2             FROM rates_joined
 )
 SELECT
-    metric AS METRIC_NAME,
+    metric_name                                                              AS METRIC_NAME,
     ROUND(MAX(CASE WHEN booking_date = CURRENT_DATE-1 THEN rate END)*100,1) AS "T-1",
     ROUND(MAX(CASE WHEN booking_date = CURRENT_DATE-2 THEN rate END)*100,1) AS "T-2",
     ROUND(MAX(CASE WHEN booking_date = CURRENT_DATE-3 THEN rate END)*100,1) AS "T-3",
@@ -965,7 +967,7 @@ SELECT
     ROUND(MEDIAN(rate)*100, 1)                                               AS "Median",
     ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY rate)*100, 1)         AS "P90"
 FROM rates_long
-GROUP BY sort_ord, metric
+GROUP BY sort_ord, metric_name
 ORDER BY sort_ord
 """
 
