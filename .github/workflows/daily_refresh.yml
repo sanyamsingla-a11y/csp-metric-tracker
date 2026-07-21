@@ -1,0 +1,31 @@
+name: Daily Data Refresh
+
+on:
+  schedule:
+    - cron: '30 2 * * *'  # 2:30 AM UTC = 8:00 AM IST
+  workflow_dispatch:       # manual trigger from GitHub UI
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Create .env from secret
+        run: echo "METABASE_API_KEY:'${{ secrets.METABASE_API_KEY }}'" > .env
+
+      - name: Run refresh
+        run: python refresh_workflows.py
+
+      - name: Commit and push
+        run: |
+          git config user.name "Sanyam Singla"
+          git config user.email "sanyam.singla@wiom.in"
+          git add workflow_data.js
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "daily refresh $(date -u +%d-%m-%Y)"
+          git push
