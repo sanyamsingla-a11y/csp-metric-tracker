@@ -1,4 +1,4 @@
- WITH
+WITH
 
 period_def AS (
     SELECT 'D-1' AS period, DATEADD(day,-1,CURRENT_DATE()) AS p_start, DATEADD(day,-1,CURRENT_DATE()) AS p_end
@@ -22,7 +22,7 @@ t_txn_matched AS (
       AND t.TRANSACTION_TYPE = 'RATING_INCENTIVE'
 ),
 
--- 36 test CARRY_FEE wallet entries (May 21-22, ≤20 paise, no comp counterpart)
+-- 36 test CARRY_FEE wallet entries (May 21-22, <=20 paise, no comp counterpart)
 carry_fee_test_ids AS (
     SELECT v.id FROM (VALUES
         ('4bb6284c-d34c-4d4e-9c1c-3a39a39ca7b0'),
