@@ -191,7 +191,7 @@ const WORKFLOWS = [
   { id: 'isp_recharge',     name: 'ISP Recharge',       health: 'isp_recharge_health',     efficiency: 'isp_recharge_efficiency' },
   { id: 'quality',          name: 'Quality',            health: 'quality_health',          efficiency: 'quality_efficiency' },
   { id: 'device_ordering',  name: 'Device Ordering',    health: 'device_ordering_health',  efficiency: 'device_ordering_efficiency' },
-  { id: 'earnings',         name: 'Earnings',           health: 'earnings_health',         efficiency: 'earnings_efficiency' },
+  { id: 'earnings',         name: 'Earnings',           health: 'earnings_health',         efficiency: 'earnings_efficiency',            funnel: 'earnings_raw' },
 ];
 
 const COLS_HEALTH = ['Today','T-1','T-2','T-3','T-4','T-5','T-6','T-7','Average','Median','P90'];
@@ -217,7 +217,7 @@ function buildSidebar() {
         <div class="wf-item" data-key="${wf.efficiency}" onclick="loadMetric('${wf.efficiency}', '${wf.name}', 'Efficiency')">
           <span class="dot-efficiency"></span> Efficiency
         </div>
-        ${wf.funnel ? '<div class="wf-item" data-key="' + wf.funnel + '" onclick="loadMetric(\'' + wf.funnel + '\', \'' + wf.name + '\', \'Funnel\')"><span class="dot-funnel"></span> Funnel</div>' : ''}
+        ${wf.funnel ? '<div class="wf-item" data-key="' + wf.funnel + '" onclick="loadMetric(\'' + wf.funnel + '\', \'' + wf.name + '\', \'Raw\')"><span class="dot-funnel"></span> Raw</div>' : ''}
       </div>
     </div>
   `).join('');
@@ -254,7 +254,7 @@ function loadMetric(key, wfName, type) {
   }
 
   const isRates = key.endsWith('_efficiency') || key.endsWith('_health_rates');
-  const cols = key.endsWith('_funnel') ? COLS_FUNNEL : isRates ? COLS_RATES : COLS_HEALTH;
+  const cols = (key.endsWith('_funnel') || key.endsWith('_raw')) ? COLS_FUNNEL : isRates ? COLS_RATES : COLS_HEALTH;
   const body = document.getElementById('mainBody');
   let html = buildTableHtml(rows, cols, isRates);
 
