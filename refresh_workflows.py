@@ -1103,6 +1103,29 @@ ORDER BY sort_ord
 # QUERIES["pickup_tickets_health"] = r"""..."""
 # etc.
 
+# ── Earnings queries (loaded from sql/ directory) ─────────────────
+
+def _load_sql(filename):
+    path = os.path.join(DIR, "sql", filename)
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+EARNINGS_HEALTH_QUERIES = [
+    ("earnings_health",               "earnings_q1_on_time_error_free.sql"),
+    ("earnings_health",               "earnings_q2_d1_timely_credit.sql"),
+    ("earnings_health",               "earnings_q3_d2_error_free_credit.sql"),
+    ("earnings_health",               "earnings_q4_d3_timely_debit.sql"),
+    ("earnings_health",               "earnings_q5_d4_error_free_debit.sql"),
+    ("earnings_health",               "earnings_q6_i1_sync_reliability.sql"),
+    ("earnings_health",               "earnings_q7_i2_settlement_rails.sql"),
+    ("earnings_health",               "earnings_q8_i4_notification.sql"),
+]
+
+EARNINGS_SUBTABLE_QUERIES = {
+    "earnings_health_sync_breakup":   "earnings_i1_sync_breakup.sql",
+    "earnings_raw":                   "earnings_raw_amounts.sql",
+}
+
 
 def refresh():
     ts = datetime.now().strftime("%Y-%m-%d %H:%M IST")
@@ -1116,6 +1139,29 @@ def refresh():
             print(f"  -> {len(rows)} rows")
         except Exception as e:
             print(f"  ERROR on {key}: {e}")
+            data[key] = []
+
+    # ── Earnings health: run 8 queries and merge rows into one list ──
+    earnings_health_rows = []
+    for key, filename in EARNINGS_HEALTH_QUERIES:
+        print(f"  Querying {filename}...")
+        try:
+            rows = mb_native(_load_sql(filename))
+            earnings_health_rows.extend(rows)
+            print(f"  -> {len(rows)} rows")
+        except Exception as e:
+            print(f"  ERROR on {filename}: {e}")
+    data["earnings_health"] = earnings_health_rows
+
+    # ── Earnings sub-tables (sync breakup + raw amounts) ────────────
+    for key, filename in EARNINGS_SUBTABLE_QUERIES.items():
+        print(f"  Querying {filename}...")
+        try:
+            rows = mb_native(_load_sql(filename))
+            data[key] = rows
+            print(f"  -> {len(rows)} rows")
+        except Exception as e:
+            print(f"  ERROR on {filename}: {e}")
             data[key] = []
 
     if not any(data[k] for k in data):

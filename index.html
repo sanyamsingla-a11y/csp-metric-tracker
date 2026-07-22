@@ -185,18 +185,19 @@ tbody tr.row-section td:first-child { text-transform: uppercase; }
 <script src="workflow_data.js"></script>
 <script>
 const WORKFLOWS = [
-  { id: 'b2i',              name: 'Booking to Install', health: 'b2i_health',              efficiency: 'b2i_efficiency',             funnel: 'b2i_funnel' },
+  { id: 'b2i',              name: 'Booking to Install', health: 'b2i_health',              efficiency: 'b2i_efficiency',             raw: 'b2i_funnel' },
   { id: 'service_tickets',  name: 'Service Tickets',    health: 'service_tickets_health',  efficiency: 'service_tickets_efficiency' },
   { id: 'pickup_tickets',   name: 'Pickup Tickets',     health: 'pickup_tickets_health',   efficiency: 'pickup_tickets_efficiency' },
   { id: 'isp_recharge',     name: 'ISP Recharge',       health: 'isp_recharge_health',     efficiency: 'isp_recharge_efficiency' },
   { id: 'quality',          name: 'Quality',            health: 'quality_health',          efficiency: 'quality_efficiency' },
   { id: 'device_ordering',  name: 'Device Ordering',    health: 'device_ordering_health',  efficiency: 'device_ordering_efficiency' },
-  { id: 'earnings',         name: 'Earnings',           health: 'earnings_health',         efficiency: 'earnings_efficiency',            funnel: 'earnings_raw' },
+  { id: 'earnings',         name: 'Earnings',           health: 'earnings_health',         efficiency: 'earnings_efficiency',        raw: 'earnings_raw' },
 ];
 
 const COLS_HEALTH = ['Today','T-1','T-2','T-3','T-4','T-5','T-6','T-7','Average','Median','P90'];
 const COLS_FUNNEL = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Average','Median','P90'];
 const COLS_RATES  = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'];
+const COLS_EARNINGS = ['D-1','D-2','D-3','W-1','W-2','W-3','M-1','M-2','M-3'];
 
 let activeKey = null;
 
@@ -217,7 +218,7 @@ function buildSidebar() {
         <div class="wf-item" data-key="${wf.efficiency}" onclick="loadMetric('${wf.efficiency}', '${wf.name}', 'Efficiency')">
           <span class="dot-efficiency"></span> Efficiency
         </div>
-        ${wf.funnel ? '<div class="wf-item" data-key="' + wf.funnel + '" onclick="loadMetric(\'' + wf.funnel + '\', \'' + wf.name + '\', \'Raw\')"><span class="dot-funnel"></span> Raw</div>' : ''}
+        ${wf.raw ? '<div class="wf-item" data-key="' + wf.raw + '" onclick="loadMetric(\'' + wf.raw + '\', \'' + wf.name + '\', \'Raw\')"><span class="dot-funnel"></span> Raw</div>' : ''}
       </div>
     </div>
   `).join('');
@@ -253,10 +254,20 @@ function loadMetric(key, wfName, type) {
     return;
   }
 
-  const isRates = key.endsWith('_efficiency') || key.endsWith('_health_rates');
-  const cols = (key.endsWith('_funnel') || key.endsWith('_raw')) ? COLS_FUNNEL : isRates ? COLS_RATES : COLS_HEALTH;
+  const isEarnings = key.startsWith('earnings_');
+  const isEarningsRaw = key === 'earnings_raw';
+  const isRates = key.endsWith('_efficiency') || key.endsWith('_health_rates') || (isEarnings && !isEarningsRaw);
+  const cols = isEarnings ? COLS_EARNINGS : key.endsWith('_funnel') ? COLS_FUNNEL : isRates ? COLS_RATES : COLS_HEALTH;
   const body = document.getElementById('mainBody');
   let html = buildTableHtml(rows, cols, isRates);
+
+  if (key === 'earnings_health') {
+    const sub = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['earnings_health_sync_breakup'] : null;
+    if (sub && sub.length > 0) {
+      html += '<div class="section-label">I1 Sync Rate by Entry Type (%)</div>';
+      html += buildTableHtml(sub, COLS_EARNINGS, true);
+    }
+  }
 
   if (key === 'b2i_health') {
     const rates = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['b2i_health_rates'] : null;
