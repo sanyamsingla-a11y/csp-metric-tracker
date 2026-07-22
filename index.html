@@ -307,7 +307,7 @@ function buildTableHtml(rows, cols, pct) {
   html += '</tr></thead><tbody>';
 
   for (const row of rows) {
-    const name = row.METRIC_NAME || row.metric_name || '';
+    const name = row.METRIC_NAME || row.metric_name || row.metric || row.METRIC || '';
     const isSection = name.startsWith('---');
     if (isSection) {
       html += '<tr class="row-section"><td colspan="' + (cols.length + 1) + '">' + name.replace(/^-+\s*/, '') + '</td></tr>';
