@@ -305,6 +305,26 @@ function loadMetric(key, wfName, type) {
       html += '<div class="section-label">I1 Sync Rate by Entry Type (%)</div>';
       html += buildTableHtml(sub, COLS_EARNINGS, true);
     }
+    const efDebit = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['earnings_error_free_debit_by_type'] : null;
+    if (efDebit && efDebit.length > 0) {
+      html += '<div class="section-label">Error Free Debit Rate by Event Type (%)</div>';
+      html += buildTableHtml(efDebit, COLS_EARNINGS, true);
+    }
+    const tdDebit = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['earnings_timely_debit_by_type'] : null;
+    if (tdDebit && tdDebit.length > 0) {
+      html += '<div class="section-label">Timely Debit Rate by Event Type (%)</div>';
+      html += buildTableHtml(tdDebit, COLS_EARNINGS, true);
+    }
+    const efCredit = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['earnings_error_free_credit_by_type'] : null;
+    if (efCredit && efCredit.length > 0) {
+      html += '<div class="section-label">Error Free Credit Rate by Event Type (%)</div>';
+      html += buildTableHtml(efCredit, COLS_EARNINGS, true);
+    }
+    const tcCredit = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['earnings_timely_credit_by_type'] : null;
+    if (tcCredit && tcCredit.length > 0) {
+      html += '<div class="section-label">Timely Credit Rate by Event Type (%)</div>';
+      html += buildTableHtml(tcCredit, COLS_EARNINGS, true);
+    }
   }
 
   if (key === 'b2i_health') {

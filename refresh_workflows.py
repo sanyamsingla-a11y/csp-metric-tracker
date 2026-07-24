@@ -1419,6 +1419,10 @@ EARNINGS_HEALTH_QUERIES = [
 
 EARNINGS_SUBTABLE_QUERIES = {
     "earnings_health_sync_breakup":   "earnings_i1_sync_breakup.sql",
+    "earnings_error_free_debit_by_type": "earnings_q9_error_free_debit_by_type.sql",
+    "earnings_timely_debit_by_type":  "earnings_q10_timely_debit_by_type.sql",
+    "earnings_error_free_credit_by_type": "earnings_q11_error_free_credit_by_type.sql",
+    "earnings_timely_credit_by_type": "earnings_q12_timely_credit_by_type.sql",
     "earnings_raw":                   "earnings_raw_amounts.sql",
 }
 
