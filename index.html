@@ -136,6 +136,43 @@ tbody tr.row-section td:first-child { text-transform: uppercase; }
   text-align: center; padding: 60px 20px; color: var(--faint); font-size: 12.5px;
 }
 
+/* ── TAT table ── */
+.tat-note {
+  font-size: 11.5px; color: var(--faint); margin-bottom: 10px; line-height: 1.6;
+}
+.tat-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.tat-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.tat-tbl thead th {
+  font-size: 9.5px; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 680;
+  color: var(--muted); padding: 9px 10px; text-align: right; white-space: nowrap;
+  border-bottom: 2px solid var(--border); background: var(--surface);
+}
+.tat-tbl thead th.th-step { text-align: left; min-width: 172px; }
+.tat-tbl thead th.th-stat { text-align: left; min-width: 76px; border-right: 1px solid var(--border2); }
+.tat-tbl thead th.th-avg { color: var(--accent-ink); border-bottom-color: var(--accent); }
+.tat-tbl .th-sub { display: block; font-size: 8.5px; color: var(--faint); font-weight: 500; margin-top: 1px; letter-spacing: 0; text-transform: none; }
+.tat-tbl td.tat-sl {
+  text-align: left; font-weight: 600; font-size: 11px; color: var(--ink);
+  border-right: 2px solid var(--border); padding: 0 12px 0 10px;
+  vertical-align: middle; min-width: 172px; white-space: nowrap;
+}
+.tat-tbl td.tat-sl.tat-e2e { background: var(--accent-soft); color: var(--accent-ink); }
+.tat-tbl td.tat-sl.tat-nodata { color: var(--faint); font-weight: 500; }
+.tat-tbl td.tat-sn {
+  text-align: left; font-size: 11px; color: var(--muted); padding: 5px 10px 5px 8px;
+  font-weight: 500; white-space: nowrap; border-right: 1px solid var(--border2);
+}
+.tat-tbl td { padding: 5px 10px; text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap; }
+.tat-tbl tr.tat-rf td, .tat-tbl tr.tat-rf td.tat-sn { padding-top: 8px; }
+.tat-tbl tr.tat-rl td, .tat-tbl tr.tat-rl td.tat-sn { padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.tat-tbl tr.tat-rl td.tat-sl { border-bottom: 1px solid var(--border); }
+.tat-tbl tr.tat-med td { background: #FFFBEB; }
+.tat-tbl tr.tat-med td.tat-sn { background: #FFFBEB; color: var(--ink); font-weight: 700; }
+.tat-null { color: var(--faint); font-size: 11px; }
+.tat-warn { color: var(--warn); font-weight: 600; }
+.tat-flag { color: var(--bad); font-weight: 700; }
+.tat-foot { font-size: 10.5px; color: var(--faint); margin-top: 8px; line-height: 1.6; }
+
 /* ── Responsive ── */
 @media (max-width: 860px) {
   .sidebar { width: 210px; min-width: 210px; }
@@ -198,6 +235,7 @@ const COLS_HEALTH = ['Today','T-1','T-2','T-3','T-4','T-5','T-6','T-7','Average'
 const COLS_FUNNEL = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Average','Median','P90'];
 const COLS_RATES  = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'];
 const COLS_EARNINGS = ['D-1','D-2','D-3','W-1','W-2','W-3','M-1','M-2','M-3'];
+const COLS_TAT = ['D-1','D-2','D-3','D-4','D-5','D-6','D-7','D-8','W','W-1','W-2','W-3','30d'];
 
 let activeKey = null;
 
@@ -284,9 +322,79 @@ function loadMetric(key, wfName, type) {
              '<div class="section-label">Conversion Rates (%)</div>' +
              html;
     }
+    const sla = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['b2i_sla'] : null;
+    if (sla && sla.length > 0) {
+      html += '<div class="section-label">B2I SLA Buckets (%)</div>';
+      html += buildTableHtml(sla, COLS_TAT, false);
+    }
+  }
+
+  if (key === 'b2i_funnel') {
+    const tat = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['b2i_tat'] : null;
+    if (tat && tat.length > 0) {
+      html += '<div class="section-label">Step Turn-Around Time (TAT)</div>';
+      html += '<p class="tat-note">Minutes between consecutive on-site steps (values &gt; 0 only). Highlighted row = median. <span class="tat-warn">Orange</span> = CV ≥ 250% or mean ≥ 100 min. <span class="tat-flag">Red</span> = CV ≥ 400%.</p>';
+      html += buildTatHtml(tat);
+    }
   }
 
   body.innerHTML = html;
+}
+
+function buildTatHtml(rows) {
+  const TAT_COLS = COLS_TAT;
+  const STATS_PER_STEP = 3;
+
+  let h = '<div class="tat-wrap"><table class="tat-tbl"><thead><tr>';
+  h += '<th class="th-step">Step</th><th class="th-stat">Stat</th>';
+  TAT_COLS.forEach(c => {
+    const cls = ['W','W-1','W-2','W-3','30d'].includes(c) ? ' class="th-avg"' : '';
+    h += '<th' + cls + '>' + c + '</th>';
+  });
+  h += '</tr></thead><tbody>';
+
+  for (let i = 0; i < rows.length; i += STATS_PER_STEP) {
+    const group = rows.slice(i, i + STATS_PER_STEP);
+    const step = group[0].STEP;
+    const isTotal = step.includes('Total');
+    const allNull = group.every(r => TAT_COLS.every(c => r[c] === null || r[c] === undefined));
+
+    group.forEach((row, ri) => {
+      const isFirst = ri === 0;
+      const isLast  = ri === STATS_PER_STEP - 1;
+      const isMed   = ri === 1;
+      const rc = (isMed ? 'tat-med ' : '') + (isFirst ? 'tat-rf ' : '') + (isLast ? 'tat-rl' : '');
+      h += '<tr class="' + rc.trim() + '">';
+
+      if (isFirst) {
+        const slCls = 'tat-sl' + (isTotal ? ' tat-e2e' : '') + (allNull ? ' tat-nodata' : '');
+        h += '<td class="' + slCls + '" rowspan="' + STATS_PER_STEP + '">' + step + '</td>';
+      }
+
+      const statLabel = isMed ? '<strong>' + row.STAT + '</strong>' : row.STAT;
+      h += '<td class="tat-sn">' + statLabel + '</td>';
+
+      TAT_COLS.forEach(c => {
+        const v = row[c];
+        h += '<td>' + fmtTat(v, ri) + '</td>';
+      });
+      h += '</tr>';
+    });
+  }
+
+  h += '</tbody></table></div>';
+  return h;
+}
+
+function fmtTat(v, statIdx) {
+  if (v === null || v === undefined) return '<span class="tat-null">—</span>';
+  const n = Number(v);
+  if (isNaN(n)) return '<span class="tat-null">—</span>';
+  const s = n === 0 ? '0.0' : n.toFixed(1);
+  if (statIdx === 3 && n >= 400) return '<span class="tat-flag">' + s + '</span>';
+  if (statIdx === 3 && n >= 250) return '<span class="tat-warn">' + s + '</span>';
+  if (statIdx === 0 && n >= 100) return '<span class="tat-warn">' + s + '</span>';
+  return s;
 }
 
 function fmt(val) {

@@ -1103,28 +1103,300 @@ ORDER BY sort_ord
 # QUERIES["pickup_tickets_health"] = r"""..."""
 # etc.
 
-# ── Earnings queries (loaded from sql/ directory) ─────────────────
+QUERIES["b2i_sla"] = r"""
+WITH
+sla_base AS (
+    SELECT
+        DATE(BOOKING_CONFIRM_TIME) AS booking_confirm_date,
+        DATEDIFF('minute', BOOKING_CONFIRM_TIME, INSTALL_TIME) AS tat_mins
+    FROM prod_db.public.COMPANY_B_CONNECTION_BOOKING_ENRICHED
+    WHERE MOBILE > '5999999999'
+      AND IS_INSTALLED = 1
+      AND BOOKING_CONFIRM_TIME IS NOT NULL
+      AND INSTALL_TIME IS NOT NULL
+      AND DATEDIFF('minute', BOOKING_CONFIRM_TIME, INSTALL_TIME) >= 0
+      AND DATE(BOOKING_CONFIRM_TIME) >= DATEADD('day', -37, CURRENT_DATE)
+),
+bucketed AS (
+    SELECT
+        tat_mins,
+        CASE
+            WHEN booking_confirm_date = DATEADD('day',-1, CURRENT_DATE) THEN 'D-1'
+            WHEN booking_confirm_date = DATEADD('day',-2, CURRENT_DATE) THEN 'D-2'
+            WHEN booking_confirm_date = DATEADD('day',-3, CURRENT_DATE) THEN 'D-3'
+            WHEN booking_confirm_date = DATEADD('day',-4, CURRENT_DATE) THEN 'D-4'
+            WHEN booking_confirm_date = DATEADD('day',-5, CURRENT_DATE) THEN 'D-5'
+            WHEN booking_confirm_date = DATEADD('day',-6, CURRENT_DATE) THEN 'D-6'
+            WHEN booking_confirm_date = DATEADD('day',-7, CURRENT_DATE) THEN 'D-7'
+            WHEN booking_confirm_date = DATEADD('day',-8, CURRENT_DATE) THEN 'D-8'
+        END AS day_bucket,
+        CASE
+            WHEN DATE_TRUNC('week', booking_confirm_date) = DATE_TRUNC('week', CURRENT_DATE)                     THEN 'W'
+            WHEN DATE_TRUNC('week', booking_confirm_date) = DATEADD('week',-1, DATE_TRUNC('week', CURRENT_DATE)) THEN 'W-1'
+            WHEN DATE_TRUNC('week', booking_confirm_date) = DATEADD('week',-2, DATE_TRUNC('week', CURRENT_DATE)) THEN 'W-2'
+            WHEN DATE_TRUNC('week', booking_confirm_date) = DATEADD('week',-3, DATE_TRUNC('week', CURRENT_DATE)) THEN 'W-3'
+        END AS week_bucket,
+        IFF(booking_confirm_date >= DATEADD('day',-30, CURRENT_DATE), 1, 0) AS in_30d
+    FROM sla_base
+),
+per_bucket AS (
+    SELECT bucket,
+        ROUND(COUNT(CASE WHEN tat_mins <= 30   THEN 1 END) * 100.0 / NULLIF(COUNT(*),0), 1) AS pct_30min,
+        ROUND(COUNT(CASE WHEN tat_mins <= 60   THEN 1 END) * 100.0 / NULLIF(COUNT(*),0), 1) AS pct_1hr,
+        ROUND(COUNT(CASE WHEN tat_mins <= 240  THEN 1 END) * 100.0 / NULLIF(COUNT(*),0), 1) AS pct_4hr,
+        ROUND(COUNT(CASE WHEN tat_mins <= 1440 THEN 1 END) * 100.0 / NULLIF(COUNT(*),0), 1) AS pct_24hr,
+        COUNT(*) AS installs
+    FROM (
+        SELECT day_bucket  AS bucket, tat_mins FROM bucketed WHERE day_bucket  IS NOT NULL
+        UNION ALL
+        SELECT week_bucket AS bucket, tat_mins FROM bucketed WHERE week_bucket IS NOT NULL
+        UNION ALL
+        SELECT '30d'       AS bucket, tat_mins FROM bucketed WHERE in_30d = 1
+    ) x
+    GROUP BY bucket
+)
+SELECT
+    stat_ord, stat AS METRIC_NAME,
+    MAX(CASE WHEN bucket='D-1' THEN val END) AS "D-1",
+    MAX(CASE WHEN bucket='D-2' THEN val END) AS "D-2",
+    MAX(CASE WHEN bucket='D-3' THEN val END) AS "D-3",
+    MAX(CASE WHEN bucket='D-4' THEN val END) AS "D-4",
+    MAX(CASE WHEN bucket='D-5' THEN val END) AS "D-5",
+    MAX(CASE WHEN bucket='D-6' THEN val END) AS "D-6",
+    MAX(CASE WHEN bucket='D-7' THEN val END) AS "D-7",
+    MAX(CASE WHEN bucket='D-8' THEN val END) AS "D-8",
+    MAX(CASE WHEN bucket='W'   THEN val END) AS "W",
+    MAX(CASE WHEN bucket='W-1' THEN val END) AS "W-1",
+    MAX(CASE WHEN bucket='W-2' THEN val END) AS "W-2",
+    MAX(CASE WHEN bucket='W-3' THEN val END) AS "W-3",
+    MAX(CASE WHEN bucket='30d' THEN val END) AS "30d"
+FROM (
+    SELECT 0 AS stat_ord, '≤ 30 min (B2I)' AS stat, bucket, pct_30min  AS val FROM per_bucket
+    UNION ALL SELECT 1, '≤ 1 hr (B2I)',  bucket, pct_1hr  FROM per_bucket
+    UNION ALL SELECT 2, '≤ 4 hrs (B2I)', bucket, pct_4hr  FROM per_bucket
+    UNION ALL SELECT 3, '≤ 24 hrs (B2I)',bucket, pct_24hr FROM per_bucket
+    UNION ALL SELECT 4, 'Total installs', bucket, installs::FLOAT FROM per_bucket
+) x
+GROUP BY stat_ord, stat
+ORDER BY stat_ord
+"""
 
-def _load_sql(filename):
-    path = os.path.join(DIR, "sql", filename)
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read()
-
-EARNINGS_HEALTH_QUERIES = [
-    ("earnings_health",               "earnings_q1_on_time_error_free.sql"),
-    ("earnings_health",               "earnings_q2_d1_timely_credit.sql"),
-    ("earnings_health",               "earnings_q3_d2_error_free_credit.sql"),
-    ("earnings_health",               "earnings_q4_d3_timely_debit.sql"),
-    ("earnings_health",               "earnings_q5_d4_error_free_debit.sql"),
-    ("earnings_health",               "earnings_q6_i1_sync_reliability.sql"),
-    ("earnings_health",               "earnings_q7_i2_settlement_rails.sql"),
-    ("earnings_health",               "earnings_q8_i4_notification.sql"),
-]
-
-EARNINGS_SUBTABLE_QUERIES = {
-    "earnings_health_sync_breakup":   "earnings_i1_sync_breakup.sql",
-    "earnings_raw":                   "earnings_raw_amounts.sql",
-}
+QUERIES["b2i_tat"] = r"""
+WITH
+bb AS (
+    SELECT
+        e.mobile,
+        ROW_NUMBER() OVER (PARTITION BY e.mobile ORDER BY e.booking_confirm_time) AS wn,
+        e.booking_confirm_time AS fee_time,
+        COALESCE(e.next_booking_time, DATEADD(minute,330,CURRENT_TIMESTAMP())) AS wend,
+        e.booking_confirm_time AS confirm_time
+    FROM prod_db.public.COMPANY_B_CONNECTION_BOOKING_ENRICHED e
+    WHERE e.mobile > '5999999999'
+      AND DATE(e.booking_confirm_time) BETWEEN '2026-05-01' AND CURRENT_DATE
+),
+wp AS (
+    SELECT DISTINCT b.mobile, b.wn, e.account_id AS partner_id
+    FROM bb b
+    JOIN prod_db.public.taskvanilla_audit e
+      ON e.mobile=b.mobile AND e.account_id IS NOT NULL
+     AND DATEADD(minute,330,e.added_time) >= b.fee_time
+     AND DATEADD(minute,330,e.added_time) <  b.wend
+     AND UPPER(e.event_name) IN ('INTERESTED','AWAITING_SLOT_PROPOSAL','AWAITING_CUSTOMER_SLOT_CONFIRMATION')
+),
+tp AS (
+    SELECT wp.mobile, wp.wn, wp.partner_id,
+        MIN(CASE WHEN UPPER(e.event_name) IN ('REACHED_HOME','ARRIVED_AT_SITE') THEN DATEADD(minute,330,e.added_time) END) arrived_time,
+        MIN(CASE WHEN UPPER(e.event_name)='SELFIE'          THEN DATEADD(minute,330,e.added_time) END) selfie_time,
+        MIN(CASE WHEN UPPER(e.event_name)='AADHAR'          THEN DATEADD(minute,330,e.added_time) END) aadhar_time,
+        MIN(CASE WHEN UPPER(e.event_name)='SHARED'          THEN DATEADD(minute,330,e.added_time) END) shared_time,
+        MIN(CASE WHEN UPPER(e.event_name)='CONNECTION_INFO'  THEN DATEADD(minute,330,e.added_time) END) connection_info_time,
+        MIN(CASE WHEN UPPER(e.event_name)='DEVICE_PHOTO'    THEN DATEADD(minute,330,e.added_time) END) device_photo_time,
+        MIN(CASE WHEN UPPER(e.event_name)='SPEED_TEST'      THEN DATEADD(minute,330,e.added_time) END) speed_test_time,
+        MIN(CASE WHEN UPPER(e.event_name)='OTP_VERIFIED'    THEN DATEADD(minute,330,e.added_time) END) install_time,
+        MIN(CASE WHEN UPPER(e.event_name)='RATING'          THEN DATEADD(minute,330,e.added_time) END) rating_time
+    FROM wp
+    JOIN bb b ON b.mobile=wp.mobile AND b.wn=wp.wn
+    JOIN prod_db.public.taskvanilla_audit e
+      ON e.mobile=wp.mobile AND e.account_id=wp.partner_id
+     AND DATEADD(minute,330,e.added_time) >= b.fee_time
+     AND DATEADD(minute,330,e.added_time) <  b.wend
+    GROUP BY wp.mobile, wp.wn, wp.partner_id
+),
+bl AS (
+    SELECT b.mobile, b.wn,
+        MIN(CASE WHEN LOWER(bl.event_name)='sd_payment_received'
+                 THEN DATEADD(minute,330,bl.added_time) END) install_fee_time
+    FROM bb b
+    JOIN prod_db.public.bookingvanilla_audit bl
+      ON bl.mobile=b.mobile
+     AND DATEADD(minute,330,bl.added_time) >= b.fee_time
+     AND DATEADD(minute,330,bl.added_time) <  b.wend
+    GROUP BY b.mobile, b.wn
+),
+win_exec AS (
+    SELECT DISTINCT b.mobile, b.wn, t.execution_candidate_id AS exec_id
+    FROM bb b
+    JOIN prod_db.public.taskvanilla_audit t
+      ON t.mobile=b.mobile AND t.execution_candidate_id IS NOT NULL
+     AND DATEADD(minute,330,t.added_time) >= b.fee_time
+     AND DATEADD(minute,330,t.added_time) <  b.wend
+),
+isp AS (
+    SELECT mobile, wn,
+        MIN(CASE WHEN ev='speed_test_completed' THEN ts END) speed_test_csp_time
+    FROM (
+        SELECT b.mobile, b.wn, e.event_name ev, TRY_TO_TIMESTAMP(e.timestamp) ts
+        FROM win_exec we
+        JOIN prod_db.CLEVERTAP_CSP_API.EVENTS_DATA e
+          ON TRY_PARSE_JSON(e.properties):execution_id::string = we.exec_id
+         AND e.event_name = 'speed_test_completed'
+        JOIN bb b ON b.mobile=we.mobile AND b.wn=we.wn
+         AND TRY_TO_TIMESTAMP(e.timestamp)>=b.fee_time AND TRY_TO_TIMESTAMP(e.timestamp)<b.wend
+    ) u
+    GROUP BY mobile, wn
+),
+bl AS (
+    SELECT b.mobile, b.wn,
+        MIN(CASE WHEN LOWER(bl.event_name)='sd_payment_received' THEN DATEADD(minute,330,bl.added_time) END) install_fee_time
+    FROM bb b
+    JOIN prod_db.public.bookingvanilla_audit bl ON bl.mobile=b.mobile
+     AND DATEADD(minute,330,bl.added_time)>=b.fee_time AND DATEADD(minute,330,bl.added_time)<b.wend
+    GROUP BY b.mobile, b.wn
+),
+pw AS (
+    SELECT
+        b.mobile, b.wn, b.confirm_time,
+        tp.arrived_time, tp.selfie_time, tp.aadhar_time, tp.shared_time,
+        tp.device_photo_time, tp.connection_info_time,
+        COALESCE(tp.speed_test_time, isp.speed_test_csp_time) AS speed_test_time,
+        tp.install_time,
+        CASE WHEN tp.arrived_time IS NOT NULL THEN bl.install_fee_time ELSE NULL END AS install_fee_time,
+        tp.rating_time
+    FROM bb b
+    LEFT JOIN wp   ON wp.mobile=b.mobile AND wp.wn=b.wn
+    LEFT JOIN tp   ON tp.mobile=b.mobile AND tp.wn=b.wn AND tp.partner_id=wp.partner_id
+    LEFT JOIN isp  ON isp.mobile=b.mobile AND isp.wn=b.wn
+    LEFT JOIN bl   ON bl.mobile=b.mobile AND bl.wn=b.wn
+),
+base AS (
+    SELECT
+        p.mobile, p.wn,
+        DATE(p.confirm_time) AS booking_confirm_date,
+        MAX(p.install_time) AS install_time,
+        DATEDIFF('minute', MIN(CASE WHEN p.arrived_time IS NOT NULL THEN p.arrived_time END),
+                           MIN(CASE WHEN p.selfie_time  IS NOT NULL THEN p.selfie_time  END)) AS tat_arrived_to_selfie_mins,
+        DATEDIFF('minute', MIN(CASE WHEN p.selfie_time  IS NOT NULL THEN p.selfie_time  END),
+                           MIN(CASE WHEN p.aadhar_time  IS NOT NULL THEN p.aadhar_time  END)) AS tat_selfie_to_aadhar_mins,
+        DATEDIFF('minute', MIN(CASE WHEN p.aadhar_time  IS NOT NULL THEN p.aadhar_time  END),
+                           MAX(p.install_fee_time))                                            AS tat_aadhar_to_fee_mins,
+        DATEDIFF('minute', MAX(p.install_fee_time),
+                           MIN(CASE WHEN p.shared_time  IS NOT NULL THEN p.shared_time  END)) AS tat_fee_to_shared_mins,
+        DATEDIFF('minute', MIN(CASE WHEN p.shared_time          IS NOT NULL THEN p.shared_time          END),
+                           MIN(CASE WHEN p.connection_info_time IS NOT NULL THEN p.connection_info_time END)) AS tat_shared_to_conn_info_mins,
+        DATEDIFF('minute', MIN(CASE WHEN p.connection_info_time IS NOT NULL THEN p.connection_info_time END),
+                           MIN(CASE WHEN p.device_photo_time    IS NOT NULL THEN p.device_photo_time    END)) AS tat_conn_info_to_device_photo_mins,
+        DATEDIFF('minute', MIN(CASE WHEN p.device_photo_time    IS NOT NULL THEN p.device_photo_time    END),
+                           MIN(CASE WHEN p.speed_test_time      IS NOT NULL THEN p.speed_test_time      END)) AS tat_device_photo_to_speed_test_mins,
+        DATEDIFF('minute', MIN(CASE WHEN p.speed_test_time      IS NOT NULL THEN p.speed_test_time      END),
+                           MAX(p.install_time))                                                AS tat_speed_test_to_install_mins,
+        DATEDIFF('minute', MAX(p.install_time),
+                           MIN(CASE WHEN p.rating_time IS NOT NULL THEN p.rating_time END))    AS tat_install_to_rating_mins,
+        DATEDIFF('minute', MIN(CASE WHEN p.arrived_time IS NOT NULL THEN p.arrived_time END),
+                           MIN(CASE WHEN p.rating_time  IS NOT NULL THEN p.rating_time  END))  AS tat_arrived_to_rating_mins
+    FROM pw p
+    GROUP BY p.mobile, p.wn, DATE(p.confirm_time)
+),
+unpivoted AS (
+    SELECT booking_confirm_date, 0 AS step_ord, 'Arrive -> Selfie'          AS step_name, tat_arrived_to_selfie_mins           AS tat_mins FROM base WHERE install_time IS NOT NULL AND tat_arrived_to_selfie_mins IS NOT NULL           AND tat_arrived_to_selfie_mins >= 0
+    UNION ALL SELECT booking_confirm_date, 1, 'Selfie -> Aadhar',            tat_selfie_to_aadhar_mins          FROM base WHERE install_time IS NOT NULL AND tat_selfie_to_aadhar_mins IS NOT NULL           AND tat_selfie_to_aadhar_mins >= 0
+    UNION ALL SELECT booking_confirm_date, 2, 'Aadhar -> Install Fee',       tat_aadhar_to_fee_mins             FROM base WHERE install_time IS NOT NULL AND tat_aadhar_to_fee_mins IS NOT NULL              AND tat_aadhar_to_fee_mins >= 0
+    UNION ALL SELECT booking_confirm_date, 3, 'Install Fee -> Shared',       tat_fee_to_shared_mins             FROM base WHERE install_time IS NOT NULL AND tat_fee_to_shared_mins IS NOT NULL              AND tat_fee_to_shared_mins >= 0
+    UNION ALL SELECT booking_confirm_date, 4, 'Shared -> Conn Info',         tat_shared_to_conn_info_mins       FROM base WHERE install_time IS NOT NULL AND tat_shared_to_conn_info_mins IS NOT NULL        AND tat_shared_to_conn_info_mins >= 0
+    UNION ALL SELECT booking_confirm_date, 5, 'Conn Info -> Device Photo',   tat_conn_info_to_device_photo_mins FROM base WHERE install_time IS NOT NULL AND tat_conn_info_to_device_photo_mins IS NOT NULL  AND tat_conn_info_to_device_photo_mins >= 0
+    UNION ALL SELECT booking_confirm_date, 6, 'Device Photo -> Speed Test',  tat_device_photo_to_speed_test_mins FROM base WHERE install_time IS NOT NULL AND tat_device_photo_to_speed_test_mins IS NOT NULL AND tat_device_photo_to_speed_test_mins >= 0
+    UNION ALL SELECT booking_confirm_date, 7, 'Speed Test -> Install',       tat_speed_test_to_install_mins     FROM base WHERE install_time IS NOT NULL AND tat_speed_test_to_install_mins IS NOT NULL      AND tat_speed_test_to_install_mins >= 0
+    UNION ALL SELECT booking_confirm_date, 8, 'Install -> Rating',           tat_install_to_rating_mins         FROM base WHERE install_time IS NOT NULL AND tat_install_to_rating_mins IS NOT NULL          AND tat_install_to_rating_mins >= 0
+    UNION ALL SELECT booking_confirm_date, 9, 'Arrived -> Rating (Total)',   tat_arrived_to_rating_mins         FROM base WHERE install_time IS NOT NULL AND tat_arrived_to_rating_mins IS NOT NULL          AND tat_arrived_to_rating_mins >= 0
+),
+bucketed AS (
+    SELECT
+        step_ord, step_name, tat_mins,
+        CASE
+            WHEN booking_confirm_date = DATEADD('day',-1, CURRENT_DATE) THEN 'D-1'
+            WHEN booking_confirm_date = DATEADD('day',-2, CURRENT_DATE) THEN 'D-2'
+            WHEN booking_confirm_date = DATEADD('day',-3, CURRENT_DATE) THEN 'D-3'
+            WHEN booking_confirm_date = DATEADD('day',-4, CURRENT_DATE) THEN 'D-4'
+            WHEN booking_confirm_date = DATEADD('day',-5, CURRENT_DATE) THEN 'D-5'
+            WHEN booking_confirm_date = DATEADD('day',-6, CURRENT_DATE) THEN 'D-6'
+            WHEN booking_confirm_date = DATEADD('day',-7, CURRENT_DATE) THEN 'D-7'
+            WHEN booking_confirm_date = DATEADD('day',-8, CURRENT_DATE) THEN 'D-8'
+        END AS day_bucket,
+        CASE
+            WHEN DATE_TRUNC('week', booking_confirm_date) = DATE_TRUNC('week', CURRENT_DATE)                     THEN 'W'
+            WHEN DATE_TRUNC('week', booking_confirm_date) = DATEADD('week',-1, DATE_TRUNC('week', CURRENT_DATE)) THEN 'W-1'
+            WHEN DATE_TRUNC('week', booking_confirm_date) = DATEADD('week',-2, DATE_TRUNC('week', CURRENT_DATE)) THEN 'W-2'
+            WHEN DATE_TRUNC('week', booking_confirm_date) = DATEADD('week',-3, DATE_TRUNC('week', CURRENT_DATE)) THEN 'W-3'
+        END AS week_bucket,
+        IFF(booking_confirm_date >= DATEADD('day',-30, CURRENT_DATE), 1, 0) AS in_30d
+    FROM unpivoted
+    WHERE booking_confirm_date >= DATEADD('day', -37, CURRENT_DATE)
+),
+daily_stats AS (
+    SELECT step_ord, step_name, day_bucket AS bucket,
+        ROUND(AVG(tat_mins), 1)    AS mean_val,
+        ROUND(MEDIAN(tat_mins), 1) AS median_val,
+        ROUND(STDDEV(tat_mins), 1) AS stddev_val
+    FROM bucketed WHERE day_bucket IS NOT NULL
+    GROUP BY step_ord, step_name, day_bucket
+),
+weekly_stats AS (
+    SELECT step_ord, step_name, week_bucket AS bucket,
+        ROUND(AVG(tat_mins), 1)    AS mean_val,
+        ROUND(MEDIAN(tat_mins), 1) AS median_val,
+        ROUND(STDDEV(tat_mins), 1) AS stddev_val
+    FROM bucketed WHERE week_bucket IS NOT NULL
+    GROUP BY step_ord, step_name, week_bucket
+),
+monthly_stats AS (
+    SELECT step_ord, step_name, '30d' AS bucket,
+        ROUND(AVG(tat_mins), 1)    AS mean_val,
+        ROUND(MEDIAN(tat_mins), 1) AS median_val,
+        ROUND(STDDEV(tat_mins), 1) AS stddev_val
+    FROM bucketed WHERE in_30d = 1
+    GROUP BY step_ord, step_name
+),
+all_stat_rows AS (
+    SELECT step_ord, step_name, bucket, 0 AS stat_ord, 'Mean (min)'   AS stat, mean_val   AS val FROM daily_stats
+    UNION ALL SELECT step_ord, step_name, bucket, 1, 'Median (min)',   median_val FROM daily_stats
+    UNION ALL SELECT step_ord, step_name, bucket, 2, 'StdDev',         stddev_val FROM daily_stats
+    UNION ALL SELECT step_ord, step_name, bucket, 0, 'Mean (min)',     mean_val   FROM weekly_stats
+    UNION ALL SELECT step_ord, step_name, bucket, 1, 'Median (min)',   median_val FROM weekly_stats
+    UNION ALL SELECT step_ord, step_name, bucket, 2, 'StdDev',         stddev_val FROM weekly_stats
+    UNION ALL SELECT step_ord, step_name, bucket, 0, 'Mean (min)',     mean_val   FROM monthly_stats
+    UNION ALL SELECT step_ord, step_name, bucket, 1, 'Median (min)',   median_val FROM monthly_stats
+    UNION ALL SELECT step_ord, step_name, bucket, 2, 'StdDev',         stddev_val FROM monthly_stats
+)
+SELECT
+    step_ord * 3 + stat_ord                            AS sort_ord,
+    step_name                                          AS STEP_TRANSITION,
+    stat                                               AS STAT,
+    MAX(CASE WHEN bucket='D-1' THEN val END)           AS "D-1",
+    MAX(CASE WHEN bucket='D-2' THEN val END)           AS "D-2",
+    MAX(CASE WHEN bucket='D-3' THEN val END)           AS "D-3",
+    MAX(CASE WHEN bucket='D-4' THEN val END)           AS "D-4",
+    MAX(CASE WHEN bucket='D-5' THEN val END)           AS "D-5",
+    MAX(CASE WHEN bucket='D-6' THEN val END)           AS "D-6",
+    MAX(CASE WHEN bucket='D-7' THEN val END)           AS "D-7",
+    MAX(CASE WHEN bucket='D-8' THEN val END)           AS "D-8",
+    MAX(CASE WHEN bucket='W'   THEN val END)           AS "W",
+    MAX(CASE WHEN bucket='W-1' THEN val END)           AS "W-1",
+    MAX(CASE WHEN bucket='W-2' THEN val END)           AS "W-2",
+    MAX(CASE WHEN bucket='W-3' THEN val END)           AS "W-3",
+    MAX(CASE WHEN bucket='30d' THEN val END)           AS "30d"
+FROM all_stat_rows
+GROUP BY step_ord, step_name, stat_ord, stat
+ORDER BY step_ord, stat_ord
+"""
 
 
 def refresh():
@@ -1141,28 +1413,11 @@ def refresh():
             print(f"  ERROR on {key}: {e}")
             data[key] = []
 
-    # ── Earnings health: run 8 queries and merge rows into one list ──
-    earnings_health_rows = []
-    for key, filename in EARNINGS_HEALTH_QUERIES:
-        print(f"  Querying {filename}...")
-        try:
-            rows = mb_native(_load_sql(filename))
-            earnings_health_rows.extend(rows)
-            print(f"  -> {len(rows)} rows")
-        except Exception as e:
-            print(f"  ERROR on {filename}: {e}")
-    data["earnings_health"] = earnings_health_rows
-
-    # ── Earnings sub-tables (sync breakup + raw amounts) ────────────
-    for key, filename in EARNINGS_SUBTABLE_QUERIES.items():
-        print(f"  Querying {filename}...")
-        try:
-            rows = mb_native(_load_sql(filename))
-            data[key] = rows
-            print(f"  -> {len(rows)} rows")
-        except Exception as e:
-            print(f"  ERROR on {filename}: {e}")
-            data[key] = []
+    # b2i_tat: rename for frontend
+    if data.get("b2i_tat"):
+        for row in data["b2i_tat"]:
+            if "STEP_TRANSITION" in row:
+                row["STEP"] = row.pop("STEP_TRANSITION")
 
     if not any(data[k] for k in data):
         print("ERROR: All queries returned empty — not overwriting workflow_data.js")
