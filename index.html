@@ -236,6 +236,7 @@ const COLS_FUNNEL = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Average','
 const COLS_RATES  = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'];
 const COLS_EARNINGS = ['D-1','D-2','D-3','W-1','W-2','W-3','M-1','M-2','M-3'];
 const COLS_TAT = ['D-1','D-2','D-3','D-4','D-5','D-6','D-7','D-8','W','W-1','W-2','W-3','30d'];
+const COLS_COUNTS_ONLY = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8'];
 
 let activeKey = null;
 
@@ -294,7 +295,7 @@ function loadMetric(key, wfName, type) {
 
   const isEarnings = key.startsWith('earnings_');
   const isEarningsRaw = key === 'earnings_raw';
-  const isRates = key.endsWith('_efficiency') || key.endsWith('_health_rates') || (isEarnings && !isEarningsRaw);
+  const isRates = key.endsWith('_efficiency') || key.endsWith('_health_rates') || (isEarnings && !isEarningsRaw) || key === 'device_ordering_health';
   const cols = isEarnings ? COLS_EARNINGS : key.endsWith('_funnel') ? COLS_FUNNEL : isRates ? COLS_RATES : COLS_HEALTH;
   const body = document.getElementById('mainBody');
   let html = buildTableHtml(rows, cols, isRates);
@@ -355,6 +356,16 @@ function loadMetric(key, wfName, type) {
       html += '<div class="section-label">Step Turn-Around Time (TAT)</div>';
       html += '<p class="tat-note">Minutes between consecutive on-site steps (values &gt; 0 only). Highlighted row = median. <span class="tat-warn">Orange</span> = CV ≥ 250% or mean ≥ 100 min. <span class="tat-flag">Red</span> = CV ≥ 400%.</p>';
       html += buildTatHtml(tat);
+    }
+  }
+
+  if (key === 'device_ordering_health') {
+    const counts = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['device_ordering_health_counts'] : null;
+    if (counts && counts.length > 0) {
+      html = '<div class="section-label">Absolute Counts (Total | Matched)</div>' +
+             buildTableHtml(counts, COLS_COUNTS_ONLY, false) +
+             '<div class="section-label">Match Rates (%)</div>' +
+             html;
     }
   }
 

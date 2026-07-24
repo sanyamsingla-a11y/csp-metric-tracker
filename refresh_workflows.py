@@ -1098,6 +1098,247 @@ GROUP BY sort_ord, metric
 ORDER BY sort_ord
 """
 
+# ── Device Ordering ──────────────────────────────────────────────
+
+QUERIES["device_ordering_health_counts"] = r"""
+WITH
+orders AS (
+    SELECT
+        do.REQUEST_ID,
+        do.STATUS                                                 AS order_status,
+        TO_DATE(DATEADD(minute, 330, do.UPDATED_AT))              AS order_date,
+        f.value::STRING                                           AS device_id
+    FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.DEVICE_ORDERS do,
+         LATERAL FLATTEN(input => TRY_PARSE_JSON(do.NETBOX_IDS)) f
+    WHERE do.STATUS IN ('DISPATCHED', 'FULFILLED')
+      AND do.NETBOX_IDS IS NOT NULL
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY do.REQUEST_ID, do.STATUS ORDER BY do.UPDATED_AT) = 1
+),
+nc_history AS (
+    SELECT DEVICE_ID, STATUS,
+           TO_DATE(DATEADD(minute, 330, UPDATED_AT)) AS nc_date
+    FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY
+),
+device_checks AS (
+    SELECT o.order_status, o.order_date, o.device_id,
+        CASE WHEN o.order_status = 'DISPATCHED' AND EXISTS (
+            SELECT 1 FROM nc_history nc
+            WHERE nc.DEVICE_ID = o.device_id AND nc.STATUS = 'PENDING_CSP_RECEIPT' AND nc.nc_date = o.order_date
+        ) THEN 1 ELSE 0 END AS dispatched_ok,
+        CASE WHEN o.order_status = 'FULFILLED' AND EXISTS (
+            SELECT 1 FROM nc_history nc
+            WHERE nc.DEVICE_ID = o.device_id AND nc.STATUS = 'CUSTODIED' AND nc.nc_date = o.order_date
+        ) THEN 1 ELSE 0 END AS fulfilled_ok
+    FROM orders o
+    WHERE o.order_date BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1
+),
+q1 AS (
+    SELECT order_date AS dt,
+        'Dispatched -> Pending CSP Receipt' AS metric,
+        SUM(CASE WHEN order_status='DISPATCHED' THEN 1 ELSE 0 END) AS total,
+        SUM(dispatched_ok)                                          AS matched
+    FROM device_checks GROUP BY 1
+    UNION ALL
+    SELECT order_date,
+        'Fulfilled -> Custodied',
+        SUM(CASE WHEN order_status='FULFILLED' THEN 1 ELSE 0 END),
+        SUM(fulfilled_ok)
+    FROM device_checks GROUP BY 1
+),
+wallet_deductions AS (
+    SELECT DATE(DATEADD(minute, 330, created_at)) AS dt, ABS(SUM(amount)) AS amt_deducted
+    FROM PROD_DB.CSP_PAYMENT_SETTLEMENT_SERVICE_CSP_PAYMENT_SETTLEMENT_SERVICE.WALLET_LEDGER_ENTRIES
+    WHERE _fivetran_active AND entry_type = 'NETBOX_SECURITY_DEDUCTION'
+      AND DATE(DATEADD(minute, 330, created_at)) BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1
+    GROUP BY 1
+),
+deposit_additions AS (
+    SELECT DATE(DATEADD(minute, 330, created_at)) AS dt, SUM(amount) AS amt_added
+    FROM PROD_DB.CSP_PAYMENT_SETTLEMENT_SERVICE_CSP_PAYMENT_SETTLEMENT_SERVICE.DEPOSIT_LEDGER_ENTRIES
+    WHERE _fivetran_active AND entry_type = 'SECURITY_FROM_WALLET'
+      AND DATE(DATEADD(minute, 330, created_at)) BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1
+    GROUP BY 1
+),
+q2 AS (
+    SELECT COALESCE(w.dt, d.dt) AS dt,
+        'Wallet Deducted -> Deposit Added'   AS metric,
+        COALESCE(w.amt_deducted, 0)         AS total,
+        COALESCE(d.amt_added, 0)            AS matched
+    FROM wallet_deductions w
+    FULL OUTER JOIN deposit_additions d ON w.dt = d.dt
+),
+t1 AS (
+    SELECT DATE(modified_time) AS dt, da.device_id
+    FROM PROD_DB.POSTGRES_RDS_INVENTORY_INVENTORY.T_DEVICE_AUDIT da
+    WHERE da.status = 'IN_WAREHOUSE'
+      AND DATE(modified_time) BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1
+      AND EXISTS (
+          SELECT 1 FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY nc
+          WHERE nc.DEVICE_ID = da.device_id
+      )
+),
+t2 AS (
+    SELECT DATE(created_at) AS dt, device_id
+    FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.CUSTODY_AUDIT_LOG
+    WHERE to_state = 'RETURNED'
+      AND DATE(created_at) BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1
+),
+t1_daily AS (SELECT dt, COUNT(DISTINCT device_id) AS t1_ct FROM t1 GROUP BY dt),
+t2_daily AS (SELECT dt, COUNT(DISTINCT device_id) AS t2_ct FROM t2 GROUP BY dt),
+matched  AS (
+    SELECT t1.dt, COUNT(DISTINCT t1.device_id) AS matched_ct
+    FROM t1 INNER JOIN t2 ON t1.dt = t2.dt AND t1.device_id = t2.device_id
+    GROUP BY t1.dt
+),
+q3 AS (
+    SELECT COALESCE(t1_daily.dt, t2_daily.dt) AS dt,
+        'Returned to Warehouse Match Rate'     AS metric,
+        COALESCE(t1_daily.t1_ct, 0)           AS total,
+        COALESCE(matched.matched_ct, 0)        AS matched
+    FROM t1_daily
+    FULL OUTER JOIN t2_daily ON t1_daily.dt = t2_daily.dt
+    LEFT JOIN matched ON matched.dt = COALESCE(t1_daily.dt, t2_daily.dt)
+),
+all_metrics AS (
+    SELECT * FROM q1
+    UNION ALL SELECT * FROM q2
+    UNION ALL SELECT * FROM q3
+)
+SELECT
+    metric,
+    MAX(CASE WHEN dt = CURRENT_DATE-1 THEN total::VARCHAR || ' | ' || matched::VARCHAR END) AS "T-1",
+    MAX(CASE WHEN dt = CURRENT_DATE-2 THEN total::VARCHAR || ' | ' || matched::VARCHAR END) AS "T-2",
+    MAX(CASE WHEN dt = CURRENT_DATE-3 THEN total::VARCHAR || ' | ' || matched::VARCHAR END) AS "T-3",
+    MAX(CASE WHEN dt = CURRENT_DATE-4 THEN total::VARCHAR || ' | ' || matched::VARCHAR END) AS "T-4",
+    MAX(CASE WHEN dt = CURRENT_DATE-5 THEN total::VARCHAR || ' | ' || matched::VARCHAR END) AS "T-5",
+    MAX(CASE WHEN dt = CURRENT_DATE-6 THEN total::VARCHAR || ' | ' || matched::VARCHAR END) AS "T-6",
+    MAX(CASE WHEN dt = CURRENT_DATE-7 THEN total::VARCHAR || ' | ' || matched::VARCHAR END) AS "T-7",
+    MAX(CASE WHEN dt = CURRENT_DATE-8 THEN total::VARCHAR || ' | ' || matched::VARCHAR END) AS "T-8"
+FROM all_metrics
+GROUP BY metric
+ORDER BY metric
+"""
+
+QUERIES["device_ordering_health"] = r"""
+WITH
+orders AS (
+    SELECT
+        do.REQUEST_ID,
+        do.STATUS                                                 AS order_status,
+        TO_DATE(DATEADD(minute, 330, do.UPDATED_AT))              AS order_date,
+        f.value::STRING                                           AS device_id
+    FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.DEVICE_ORDERS do,
+         LATERAL FLATTEN(input => TRY_PARSE_JSON(do.NETBOX_IDS)) f
+    WHERE do.STATUS IN ('DISPATCHED', 'FULFILLED')
+      AND do.NETBOX_IDS IS NOT NULL
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY do.REQUEST_ID, do.STATUS ORDER BY do.UPDATED_AT) = 1
+),
+nc_history AS (
+    SELECT DEVICE_ID, STATUS,
+           TO_DATE(DATEADD(minute, 330, UPDATED_AT)) AS nc_date
+    FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY
+),
+device_checks AS (
+    SELECT o.order_status, o.order_date, o.device_id,
+        CASE WHEN o.order_status = 'DISPATCHED' AND EXISTS (
+            SELECT 1 FROM nc_history nc
+            WHERE nc.DEVICE_ID = o.device_id AND nc.STATUS = 'PENDING_CSP_RECEIPT' AND nc.nc_date = o.order_date
+        ) THEN 1 ELSE 0 END AS dispatched_ok,
+        CASE WHEN o.order_status = 'FULFILLED' AND EXISTS (
+            SELECT 1 FROM nc_history nc
+            WHERE nc.DEVICE_ID = o.device_id AND nc.STATUS = 'CUSTODIED' AND nc.nc_date = o.order_date
+        ) THEN 1 ELSE 0 END AS fulfilled_ok
+    FROM orders o
+    WHERE o.order_date BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1
+),
+q1 AS (
+    SELECT order_date AS dt,
+        'Dispatched -> Pending CSP Receipt'  AS metric,
+        ROUND(100.0 * SUM(dispatched_ok) / NULLIF(SUM(CASE WHEN order_status='DISPATCHED' THEN 1 ELSE 0 END), 0), 2) AS pct
+    FROM device_checks GROUP BY 1
+    UNION ALL
+    SELECT order_date,
+        'Fulfilled -> Custodied',
+        ROUND(100.0 * SUM(fulfilled_ok) / NULLIF(SUM(CASE WHEN order_status='FULFILLED' THEN 1 ELSE 0 END), 0), 2)
+    FROM device_checks GROUP BY 1
+),
+wallet_deductions AS (
+    SELECT DATE(DATEADD(minute, 330, created_at)) AS dt, ABS(SUM(amount)) AS amt_deducted
+    FROM PROD_DB.CSP_PAYMENT_SETTLEMENT_SERVICE_CSP_PAYMENT_SETTLEMENT_SERVICE.WALLET_LEDGER_ENTRIES
+    WHERE _fivetran_active AND entry_type = 'NETBOX_SECURITY_DEDUCTION'
+      AND DATE(DATEADD(minute, 330, created_at)) BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1
+    GROUP BY 1
+),
+deposit_additions AS (
+    SELECT DATE(DATEADD(minute, 330, created_at)) AS dt, SUM(amount) AS amt_added
+    FROM PROD_DB.CSP_PAYMENT_SETTLEMENT_SERVICE_CSP_PAYMENT_SETTLEMENT_SERVICE.DEPOSIT_LEDGER_ENTRIES
+    WHERE _fivetran_active AND entry_type = 'SECURITY_FROM_WALLET'
+      AND DATE(DATEADD(minute, 330, created_at)) BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1
+    GROUP BY 1
+),
+q2 AS (
+    SELECT COALESCE(w.dt, d.dt) AS dt,
+        'Wallet Deducted -> Deposit Added' AS metric,
+        CASE WHEN COALESCE(w.amt_deducted, 0) = 0 THEN NULL
+             ELSE ROUND(COALESCE(d.amt_added, 0) / w.amt_deducted * 100, 2)
+        END AS pct
+    FROM wallet_deductions w
+    FULL OUTER JOIN deposit_additions d ON w.dt = d.dt
+),
+t1 AS (
+    SELECT DATE(modified_time) AS dt, da.device_id
+    FROM PROD_DB.POSTGRES_RDS_INVENTORY_INVENTORY.T_DEVICE_AUDIT da
+    WHERE da.status = 'IN_WAREHOUSE'
+      AND DATE(modified_time) BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1
+      AND EXISTS (
+          SELECT 1 FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY nc
+          WHERE nc.DEVICE_ID = da.device_id
+      )
+),
+t2 AS (
+    SELECT DATE(created_at) AS dt, device_id
+    FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.CUSTODY_AUDIT_LOG
+    WHERE to_state = 'RETURNED'
+      AND DATE(created_at) BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1
+),
+t1_daily AS (SELECT dt, COUNT(DISTINCT device_id) AS t1_ct FROM t1 GROUP BY dt),
+t2_daily AS (SELECT dt, COUNT(DISTINCT device_id) AS t2_ct FROM t2 GROUP BY dt),
+matched  AS (
+    SELECT t1.dt, COUNT(DISTINCT t1.device_id) AS matched_ct
+    FROM t1 INNER JOIN t2 ON t1.dt = t2.dt AND t1.device_id = t2.device_id
+    GROUP BY t1.dt
+),
+q3 AS (
+    SELECT COALESCE(t1_daily.dt, t2_daily.dt) AS dt,
+        'Returned to Warehouse Match Rate' AS metric,
+        ROUND(100.0 * COALESCE(matched.matched_ct, 0) / NULLIF(COALESCE(t1_daily.t1_ct, 0), 0), 2) AS pct
+    FROM t1_daily
+    FULL OUTER JOIN t2_daily ON t1_daily.dt = t2_daily.dt
+    LEFT JOIN matched ON matched.dt = COALESCE(t1_daily.dt, t2_daily.dt)
+),
+all_metrics AS (
+    SELECT * FROM q1
+    UNION ALL SELECT * FROM q2
+    UNION ALL SELECT * FROM q3
+)
+SELECT
+    metric,
+    MAX(CASE WHEN dt = CURRENT_DATE - 1 THEN pct END) AS "T-1",
+    MAX(CASE WHEN dt = CURRENT_DATE - 2 THEN pct END) AS "T-2",
+    MAX(CASE WHEN dt = CURRENT_DATE - 3 THEN pct END) AS "T-3",
+    MAX(CASE WHEN dt = CURRENT_DATE - 4 THEN pct END) AS "T-4",
+    MAX(CASE WHEN dt = CURRENT_DATE - 5 THEN pct END) AS "T-5",
+    MAX(CASE WHEN dt = CURRENT_DATE - 6 THEN pct END) AS "T-6",
+    MAX(CASE WHEN dt = CURRENT_DATE - 7 THEN pct END) AS "T-7",
+    MAX(CASE WHEN dt = CURRENT_DATE - 8 THEN pct END) AS "T-8",
+    ROUND(AVG(pct), 1)                                 AS "Mean",
+    MEDIAN(pct)                                        AS "Median",
+    PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY pct)   AS "P90"
+FROM all_metrics
+GROUP BY metric
+ORDER BY metric
+"""
+
 # ── Add more workflow queries here ────────────────────────────────
 # QUERIES["service_tickets_health"] = r"""..."""
 # QUERIES["pickup_tickets_health"] = r"""..."""
