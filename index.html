@@ -287,7 +287,8 @@ function loadMetric(key, wfName, type) {
 
   const rows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[key] : null;
 
-  if (!rows || rows.length === 0) {
+  const hasSubtables = key === 'isp_recharge_efficiency';
+  if ((!rows || rows.length === 0) && !hasSubtables) {
     document.getElementById('mainBody').innerHTML =
       '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
     return;
@@ -298,7 +299,7 @@ function loadMetric(key, wfName, type) {
   const isRates = key.endsWith('_efficiency') || key.endsWith('_health_rates') || (isEarnings && !isEarningsRaw) || key === 'device_ordering_health';
   const cols = isEarnings ? COLS_EARNINGS : key.endsWith('_funnel') ? COLS_FUNNEL : isRates ? COLS_RATES : COLS_HEALTH;
   const body = document.getElementById('mainBody');
-  let html = buildTableHtml(rows, cols, isRates);
+  let html = (rows && rows.length > 0) ? buildTableHtml(rows, cols, isRates) : '';
 
   if (key === 'earnings_health') {
     const sub = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['earnings_health_sync_breakup'] : null;
@@ -356,6 +357,19 @@ function loadMetric(key, wfName, type) {
       html += '<div class="section-label">Step Turn-Around Time (TAT)</div>';
       html += '<p class="tat-note">Minutes between consecutive on-site steps (values &gt; 0 only). Highlighted row = median. <span class="tat-warn">Orange</span> = CV ≥ 250% or mean ≥ 100 min. <span class="tat-flag">Red</span> = CV ≥ 400%.</p>';
       html += buildTatHtml(tat);
+    }
+  }
+
+  if (key === 'isp_recharge_efficiency') {
+    const oblRes = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['isp_recharge_obligations_resolved'] : null;
+    if (oblRes && oblRes.length > 0) {
+      html = '<div class="section-label">Recharge Obligations Resolved (daily by reason)</div>' +
+             buildDailyTableHtml(oblRes) + html;
+    }
+    const rdni = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['isp_recharge_rdni'] : null;
+    if (rdni && rdni.length > 0) {
+      html += '<div class="section-label">RDNI within 3 Days of Recharge Resolution</div>';
+      html += buildDailyTableHtml(rdni);
     }
   }
 
@@ -461,6 +475,21 @@ function buildTableHtml(rows, cols, pct) {
     html += '</tr>';
   }
 
+  html += '</tbody></table></div>';
+  return html;
+}
+
+function buildDailyTableHtml(rows, title) {
+  if (!rows || rows.length === 0) return '';
+  const cols = Object.keys(rows[0]);
+  let html = '<div class="table-wrap"><table><thead><tr>';
+  cols.forEach(c => { html += '<th>' + c + '</th>'; });
+  html += '</tr></thead><tbody>';
+  for (const row of rows) {
+    html += '<tr>';
+    cols.forEach(c => { html += '<td>' + fmt(row[c]) + '</td>'; });
+    html += '</tr>';
+  }
   html += '</tbody></table></div>';
   return html;
 }

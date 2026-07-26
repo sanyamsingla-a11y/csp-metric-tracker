@@ -1098,6 +1098,369 @@ GROUP BY sort_ord, metric
 ORDER BY sort_ord
 """
 
+# ── ISP Recharge ────────────────────────────────────────────────
+
+QUERIES["isp_recharge_health"] = r"""
+WITH params AS (
+  SELECT DATE(CONVERT_TIMEZONE('UTC','Asia/Kolkata',CURRENT_TIMESTAMP())) AS today
+),
+obl AS (
+  SELECT CONNECTION_ID AS cid, REASON,
+         TO_DATE(DATEADD(minute,330,CREATED_AT))       AS ob_date,
+         DATEDIFF('hour', CREATED_AT, WINDOW_END)/24.0 AS days_before_expiry
+  FROM CSP_CUSTOMER_ACCESS_SERVICE_CSP_CUSTOMER_ACCESS_SERVICE.SUPPLY_RECHARGE_OBLIGATIONS
+  WHERE _FIVETRAN_ACTIVE
+    AND STATUS IN ('OPEN','RESOLVED')
+    AND CREATED_AT >= DATEADD('day',-15,CURRENT_DATE())
+),
+recharged AS (
+  SELECT DISTINCT CONNECTION_ID AS cid
+  FROM CSP_RV_SERVICE_CSP_RV_SERVICE.RECHARGE_GATES
+  WHERE _FIVETRAN_ACTIVE AND DETECTION_SOURCE='CSP'
+    AND CREATED_AT >= DATEADD('day',-15,CURRENT_DATE())
+),
+resumed AS (
+  SELECT DISTINCT CONNECTION_ID AS cid
+  FROM CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTION_EVENT_HISTORY
+  WHERE EVENT_TYPE='RECHARGE_CONFIRMED'
+    AND PROCESSING_OUTCOME IN ('TRANSITIONED','RECORDED_ONLY')
+    AND CREATED_AT >= DATEADD('day',-15,CURRENT_DATE())
+),
+ontime AS (
+  SELECT DISTINCT CONNECTION_ID AS cid
+  FROM CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTION_EVENT_HISTORY
+  WHERE EVENT_TYPE='RECHARGE_CONFIRMED' AND PREVIOUS_STATE='ACTIVE'
+    AND PROCESSING_OUTCOME='RECORDED_ONLY'
+    AND CREATED_AT >= DATEADD('day',-15,CURRENT_DATE())
+),
+per_day AS (
+  SELECT
+    o.ob_date                                                 AS d,
+    COUNT(*)                                                  AS obligations,
+    SUM(IFF(ot.cid IS NOT NULL,1,0))                          AS ontime,
+    SUM(IFF(r.cid  IS NOT NULL,1,0))                          AS recharged,
+    SUM(IFF(r.cid  IS NOT NULL AND res.cid IS NOT NULL,1,0))  AS resumed_recharged
+  FROM obl o
+  LEFT JOIN recharged r  ON r.cid=o.cid
+  LEFT JOIN resumed  res ON res.cid=o.cid
+  LEFT JOIN ontime   ot  ON ot.cid=o.cid
+  GROUP BY o.ob_date
+),
+daily_rates AS (
+  SELECT
+    d,
+    ROUND(100.0*ontime    /NULLIF(obligations,0),1) AS ontime_rate,
+    ROUND(100.0*recharged /NULLIF(obligations,0),1) AS recharge_rate,
+    ROUND(100.0*resumed_recharged/NULLIF(recharged,0),1) AS resume_rate
+  FROM per_day
+),
+date_range AS (
+  SELECT DATEADD('day', -(ROW_NUMBER() OVER (ORDER BY 1) - 1),
+                 (SELECT today FROM params)) AS dt
+  FROM TABLE(GENERATOR(ROWCOUNT => 8))
+),
+covered_connections AS (
+  SELECT DISTINCT r.connection_id, d.dt
+  FROM PROD_DB.CSP_RV_SERVICE_CSP_RV_SERVICE.RECHARGE_GATES r
+  JOIN date_range d ON d.dt BETWEEN r.WINDOW_START::date AND r.WINDOW_END::date
+),
+active_connections AS (
+  SELECT DISTINCT c.connection_id, d.dt
+  FROM T_ROUTER_USER_MAPPING trum
+  JOIN t_wg_customer tg ON trum.mobile = tg.mobile
+  JOIN PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS c
+    ON c.customer_id = tg.account_id
+  JOIN date_range d ON d.dt BETWEEN trum.OTP_ISSUED_TIME::date AND trum.OTP_EXPIRY_TIME::date
+),
+isp_expired_daily AS (
+  SELECT
+    d.dt,
+    ROUND(
+      100.0 * COUNT(DISTINCT CASE WHEN cc.connection_id IS NULL THEN ac.connection_id END)
+            / NULLIF(COUNT(DISTINCT ac.connection_id), 0),
+    1) AS isp_expired_pct
+  FROM date_range d
+  JOIN active_connections ac ON ac.dt = d.dt
+  LEFT JOIN covered_connections cc ON cc.connection_id = ac.connection_id AND cc.dt = d.dt
+  GROUP BY d.dt
+),
+commission_daily AS (
+  SELECT
+    DATE(DATEADD(minute, 330, UPDATED_AT)) AS d,
+    ROUND(100.0 * SUM(CASE WHEN state = 'ACTION_REQUIRED' THEN 1 ELSE 0 END)
+          / NULLIF(COUNT(*), 0), 2) AS commission_open_rate
+  FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RECHARGE_EXECUTION_CANDIDATES
+  WHERE _FIVETRAN_ACTIVE = TRUE
+    AND commission_status = 'DISBURSED'
+    AND UPDATED_AT >= DATEADD('day', -15, CURRENT_DATE())
+  GROUP BY DATE(DATEADD(minute, 330, UPDATED_AT))
+),
+migrated_customers AS (
+  SELECT account_id, mobile
+  FROM T_WG_CUSTOMER
+  WHERE lco_account_id IN (
+    SELECT DISTINCT partner_id
+    FROM PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT
+    WHERE _fivetran_active
+  )
+),
+puts_all AS (
+  SELECT
+    n.EXECUTION_CANDIDATE_ID, n.DEVICE_ID, n.LAST_CONNECTION_ID,
+    n.created_at AS put_created_at, n.state AS nbrec_state, n.reason_code, c.customer_id
+  FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.NBREC_EXECUTION_CANDIDATES n
+  JOIN PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS c
+    ON c.connection_id = n.LAST_CONNECTION_ID AND c._fivetran_active
+  WHERE n._fivetran_active
+    AND n.created_at >= CURRENT_DATE - 90
+    AND n.created_at <= CURRENT_DATE - 21
+),
+puts_with_customer AS (
+  SELECT p.*, mc.mobile
+  FROM puts_all p
+  JOIN migrated_customers mc ON mc.account_id = p.customer_id
+),
+puts_no_recharge_in_21d AS (
+  SELECT pw.*
+  FROM puts_with_customer pw
+  WHERE NOT EXISTS (
+    SELECT 1 FROM T_ROUTER_USER_MAPPING trum
+    WHERE trum.mobile = pw.mobile AND trum.otp = 'DONE'
+      AND trum.store_group_id = 0 AND trum.device_limit = 10
+      AND trum.mobile > '5999999999'
+      AND trum.OTP_ISSUED_TIME > pw.put_created_at
+      AND trum.OTP_ISSUED_TIME <= DATEADD(day,21,pw.put_created_at)
+  )
+),
+first_recharge_post_21d AS (
+  SELECT
+    p.EXECUTION_CANDIDATE_ID, p.DEVICE_ID, p.LAST_CONNECTION_ID,
+    p.put_created_at, p.nbrec_state, p.reason_code, p.mobile,
+    MIN(trum.OTP_ISSUED_TIME) AS recharge_at
+  FROM puts_no_recharge_in_21d p
+  JOIN T_ROUTER_USER_MAPPING trum
+    ON trum.mobile = p.mobile AND trum.otp = 'DONE'
+    AND trum.store_group_id = 0 AND trum.device_limit = 10
+    AND trum.mobile > '5999999999'
+    AND trum.OTP_ISSUED_TIME > DATEADD(day,21,p.put_created_at)
+  GROUP BY p.EXECUTION_CANDIDATE_ID, p.DEVICE_ID, p.LAST_CONNECTION_ID,
+           p.put_created_at, p.nbrec_state, p.reason_code, p.mobile
+),
+acs_transition AS (
+  SELECT device_id, created_at AS acs_transition_at
+  FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.CUSTODY_AUDIT_LOG
+  WHERE to_state = 'DEPLOYED' AND created_at >= CURRENT_DATE - 91
+),
+clos_transition AS (
+  SELECT connection_id, created_at AS clos_transition_at
+  FROM PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTION_EVENT_HISTORY
+  WHERE RESULTING_STATE IN ('ACTIVE','PAUSED') AND created_at >= CURRENT_DATE - 91
+),
+nbrec_daily AS (
+  SELECT
+    DATE(DATEADD(minute,330,pr.recharge_at)) AS d,
+    ROUND(COUNT(CASE WHEN pr.nbrec_state = 'FAILED' THEN 1 END) * 100.0 / NULLIF(COUNT(*),0), 2) AS nbrec_failed_pct,
+    ROUND(COUNT(CASE WHEN at2.acs_transition_at IS NOT NULL THEN 1 END) * 100.0 / NULLIF(COUNT(*),0), 2) AS acs_deployed_pct,
+    ROUND(COUNT(CASE WHEN ct.clos_transition_at IS NOT NULL THEN 1 END) * 100.0 / NULLIF(COUNT(*),0), 2) AS clos_active_pct
+  FROM first_recharge_post_21d pr
+  LEFT JOIN acs_transition at2
+    ON at2.device_id = pr.DEVICE_ID
+    AND ABS(DATEDIFF(day, pr.recharge_at, at2.acs_transition_at)) <= 1
+  LEFT JOIN clos_transition ct
+    ON ct.connection_id = pr.LAST_CONNECTION_ID
+    AND ABS(DATEDIFF(day, pr.recharge_at, ct.clos_transition_at)) <= 1
+  GROUP BY DATE(DATEADD(minute,330,pr.recharge_at))
+),
+agg AS (
+  SELECT
+    MAX(IFF(d=p.today,   ontime_rate,NULL)) AS ot_d0,
+    MAX(IFF(d=p.today-1, ontime_rate,NULL)) AS ot_d1,
+    MAX(IFF(d=p.today-2, ontime_rate,NULL)) AS ot_d2,
+    MAX(IFF(d=p.today-3, ontime_rate,NULL)) AS ot_d3,
+    MAX(IFF(d=p.today-4, ontime_rate,NULL)) AS ot_d4,
+    MAX(IFF(d=p.today-5, ontime_rate,NULL)) AS ot_d5,
+    MAX(IFF(d=p.today-6, ontime_rate,NULL)) AS ot_d6,
+    MAX(IFF(d=p.today-7, ontime_rate,NULL)) AS ot_d7,
+    ROUND(AVG(IFF(d BETWEEN p.today-7 AND p.today, ontime_rate,NULL)),1) AS ot_avg,
+    ROUND(MEDIAN(IFF(d BETWEEN p.today-7 AND p.today, ontime_rate,NULL)),1) AS ot_med,
+    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-7 AND p.today, ontime_rate,NULL)),1) AS ot_p90,
+    MAX(IFF(d=p.today,   recharge_rate,NULL)) AS rc_d0,
+    MAX(IFF(d=p.today-1, recharge_rate,NULL)) AS rc_d1,
+    MAX(IFF(d=p.today-2, recharge_rate,NULL)) AS rc_d2,
+    MAX(IFF(d=p.today-3, recharge_rate,NULL)) AS rc_d3,
+    MAX(IFF(d=p.today-4, recharge_rate,NULL)) AS rc_d4,
+    MAX(IFF(d=p.today-5, recharge_rate,NULL)) AS rc_d5,
+    MAX(IFF(d=p.today-6, recharge_rate,NULL)) AS rc_d6,
+    MAX(IFF(d=p.today-7, recharge_rate,NULL)) AS rc_d7,
+    ROUND(AVG(IFF(d BETWEEN p.today-7 AND p.today, recharge_rate,NULL)),1) AS rc_avg,
+    ROUND(MEDIAN(IFF(d BETWEEN p.today-7 AND p.today, recharge_rate,NULL)),1) AS rc_med,
+    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-7 AND p.today, recharge_rate,NULL)),1) AS rc_p90
+  FROM daily_rates CROSS JOIN params p
+),
+isp_agg AS (
+  SELECT
+    MAX(IFF(dt=p.today,   isp_expired_pct,NULL)) AS pa_d0,
+    MAX(IFF(dt=p.today-1, isp_expired_pct,NULL)) AS pa_d1,
+    MAX(IFF(dt=p.today-2, isp_expired_pct,NULL)) AS pa_d2,
+    MAX(IFF(dt=p.today-3, isp_expired_pct,NULL)) AS pa_d3,
+    MAX(IFF(dt=p.today-4, isp_expired_pct,NULL)) AS pa_d4,
+    MAX(IFF(dt=p.today-5, isp_expired_pct,NULL)) AS pa_d5,
+    MAX(IFF(dt=p.today-6, isp_expired_pct,NULL)) AS pa_d6,
+    MAX(IFF(dt=p.today-7, isp_expired_pct,NULL)) AS pa_d7,
+    ROUND(AVG(IFF(dt BETWEEN p.today-7 AND p.today, isp_expired_pct,NULL)),1) AS pa_avg,
+    ROUND(MEDIAN(IFF(dt BETWEEN p.today-7 AND p.today, isp_expired_pct,NULL)),1) AS pa_med,
+    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(dt BETWEEN p.today-7 AND p.today, isp_expired_pct,NULL)),1) AS pa_p90
+  FROM isp_expired_daily CROSS JOIN params p
+),
+commission_agg AS (
+  SELECT
+    MAX(IFF(d=p.today,   commission_open_rate,NULL)) AS cm_d0,
+    MAX(IFF(d=p.today-1, commission_open_rate,NULL)) AS cm_d1,
+    MAX(IFF(d=p.today-2, commission_open_rate,NULL)) AS cm_d2,
+    MAX(IFF(d=p.today-3, commission_open_rate,NULL)) AS cm_d3,
+    MAX(IFF(d=p.today-4, commission_open_rate,NULL)) AS cm_d4,
+    MAX(IFF(d=p.today-5, commission_open_rate,NULL)) AS cm_d5,
+    MAX(IFF(d=p.today-6, commission_open_rate,NULL)) AS cm_d6,
+    MAX(IFF(d=p.today-7, commission_open_rate,NULL)) AS cm_d7,
+    ROUND(AVG(IFF(d BETWEEN p.today-7 AND p.today, commission_open_rate,NULL)),1) AS cm_avg,
+    ROUND(MEDIAN(IFF(d BETWEEN p.today-7 AND p.today, commission_open_rate,NULL)),1) AS cm_med,
+    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-7 AND p.today, commission_open_rate,NULL)),1) AS cm_p90
+  FROM commission_daily CROSS JOIN params p
+),
+nbrec_agg AS (
+  SELECT
+    MAX(IFF(d=p.today,   nbrec_failed_pct,NULL)) AS nb_d0,
+    MAX(IFF(d=p.today-1, nbrec_failed_pct,NULL)) AS nb_d1,
+    MAX(IFF(d=p.today-2, nbrec_failed_pct,NULL)) AS nb_d2,
+    MAX(IFF(d=p.today-3, nbrec_failed_pct,NULL)) AS nb_d3,
+    MAX(IFF(d=p.today-4, nbrec_failed_pct,NULL)) AS nb_d4,
+    MAX(IFF(d=p.today-5, nbrec_failed_pct,NULL)) AS nb_d5,
+    MAX(IFF(d=p.today-6, nbrec_failed_pct,NULL)) AS nb_d6,
+    MAX(IFF(d=p.today-7, nbrec_failed_pct,NULL)) AS nb_d7,
+    ROUND(AVG(IFF(d BETWEEN p.today-7 AND p.today, nbrec_failed_pct,NULL)),1) AS nb_avg,
+    ROUND(MEDIAN(IFF(d BETWEEN p.today-7 AND p.today, nbrec_failed_pct,NULL)),1) AS nb_med,
+    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-7 AND p.today, nbrec_failed_pct,NULL)),1) AS nb_p90,
+    MAX(IFF(d=p.today,   acs_deployed_pct,NULL)) AS acs_d0,
+    MAX(IFF(d=p.today-1, acs_deployed_pct,NULL)) AS acs_d1,
+    MAX(IFF(d=p.today-2, acs_deployed_pct,NULL)) AS acs_d2,
+    MAX(IFF(d=p.today-3, acs_deployed_pct,NULL)) AS acs_d3,
+    MAX(IFF(d=p.today-4, acs_deployed_pct,NULL)) AS acs_d4,
+    MAX(IFF(d=p.today-5, acs_deployed_pct,NULL)) AS acs_d5,
+    MAX(IFF(d=p.today-6, acs_deployed_pct,NULL)) AS acs_d6,
+    MAX(IFF(d=p.today-7, acs_deployed_pct,NULL)) AS acs_d7,
+    ROUND(AVG(IFF(d BETWEEN p.today-7 AND p.today, acs_deployed_pct,NULL)),1) AS acs_avg,
+    ROUND(MEDIAN(IFF(d BETWEEN p.today-7 AND p.today, acs_deployed_pct,NULL)),1) AS acs_med,
+    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-7 AND p.today, acs_deployed_pct,NULL)),1) AS acs_p90,
+    MAX(IFF(d=p.today,   clos_active_pct,NULL)) AS cl_d0,
+    MAX(IFF(d=p.today-1, clos_active_pct,NULL)) AS cl_d1,
+    MAX(IFF(d=p.today-2, clos_active_pct,NULL)) AS cl_d2,
+    MAX(IFF(d=p.today-3, clos_active_pct,NULL)) AS cl_d3,
+    MAX(IFF(d=p.today-4, clos_active_pct,NULL)) AS cl_d4,
+    MAX(IFF(d=p.today-5, clos_active_pct,NULL)) AS cl_d5,
+    MAX(IFF(d=p.today-6, clos_active_pct,NULL)) AS cl_d6,
+    MAX(IFF(d=p.today-7, clos_active_pct,NULL)) AS cl_d7,
+    ROUND(AVG(IFF(d BETWEEN p.today-7 AND p.today, clos_active_pct,NULL)),1) AS cl_avg,
+    ROUND(MEDIAN(IFF(d BETWEEN p.today-7 AND p.today, clos_active_pct,NULL)),1) AS cl_med,
+    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-7 AND p.today, clos_active_pct,NULL)),1) AS cl_p90
+  FROM nbrec_daily CROSS JOIN params p
+)
+SELECT metric,
+  "Today", "T-1", "T-2", "T-3", "T-4", "T-5", "T-6", "T-7",
+  "Average", "Median", "P90"
+FROM (
+  SELECT 1 AS sort_ord, 'On-Time Recharge Rate' AS metric,
+    ot_d0 AS "Today", ot_d1 AS "T-1", ot_d2 AS "T-2", ot_d3 AS "T-3",
+    ot_d4 AS "T-4", ot_d5 AS "T-5", ot_d6 AS "T-6", ot_d7 AS "T-7",
+    ot_avg AS "Average", ot_med AS "Median", ot_p90 AS "P90"
+  FROM agg
+  UNION ALL
+  SELECT 2, 'Supply-Caused Pause Rate',
+    pa_d0, pa_d1, pa_d2, pa_d3, pa_d4, pa_d5, pa_d6, pa_d7, pa_avg, pa_med, pa_p90
+  FROM isp_agg
+  UNION ALL
+  SELECT 3, 'Recharge Completion Rate',
+    rc_d0, rc_d1, rc_d2, rc_d3, rc_d4, rc_d5, rc_d6, rc_d7, rc_avg, rc_med, rc_p90
+  FROM agg
+  UNION ALL
+  SELECT 4, 'Commission Claimed Ticket Open Rate',
+    cm_d0, cm_d1, cm_d2, cm_d3, cm_d4, cm_d5, cm_d6, cm_d7, cm_avg, cm_med, cm_p90
+  FROM commission_agg
+  UNION ALL
+  SELECT 5, 'NBREC - Failed',
+    nb_d0, nb_d1, nb_d2, nb_d3, nb_d4, nb_d5, nb_d6, nb_d7, nb_avg, nb_med, nb_p90
+  FROM nbrec_agg
+  UNION ALL
+  SELECT 6, 'ACS - Deployed within 1d',
+    acs_d0, acs_d1, acs_d2, acs_d3, acs_d4, acs_d5, acs_d6, acs_d7, acs_avg, acs_med, acs_p90
+  FROM nbrec_agg
+  UNION ALL
+  SELECT 7, 'CLOS - Active within 1d',
+    cl_d0, cl_d1, cl_d2, cl_d3, cl_d4, cl_d5, cl_d6, cl_d7, cl_avg, cl_med, cl_p90
+  FROM nbrec_agg
+) x
+ORDER BY sort_ord
+"""
+
+QUERIES["isp_recharge_obligations_resolved"] = r"""
+SELECT
+    DATE(UPDATED_AT)                                                        AS resolved_dt,
+    REASON,
+    COUNT(*)                                                                AS resolved_count,
+    ROUND(PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY DATEDIFF('hour', CREATED_AT, UPDATED_AT)), 1)  AS p50_hrs,
+    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY DATEDIFF('hour', CREATED_AT, UPDATED_AT)), 1)  AS p90_hrs,
+    ROUND(PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY DATEDIFF('hour', CREATED_AT, UPDATED_AT)), 1)  AS p99_hrs
+FROM PROD_DB.CSP_CUSTOMER_ACCESS_SERVICE_CSP_CUSTOMER_ACCESS_SERVICE.SUPPLY_RECHARGE_OBLIGATIONS
+WHERE _FIVETRAN_ACTIVE = TRUE
+  AND status = 'RESOLVED'
+GROUP BY DATE(UPDATED_AT), REASON
+ORDER BY resolved_dt DESC, REASON
+LIMIT 10000
+"""
+
+QUERIES["isp_recharge_rdni"] = r"""
+WITH rdni_complaints AS (
+    SELECT
+        connection_id,
+        complaint_id,
+        CREATED_AT AS complaint_time
+    FROM PROD_DB.CSP_SUPPORT_RESOLUTION_SERVICE_CSP_SUPPORT_RESOLUTION_SERVICE.COMPLAINTS
+    WHERE _FIVETRAN_ACTIVE = TRUE
+      AND SECONDARY_SUBTYPE = 'RECHARGE_DONE_NO_INTERNET'
+),
+resolved_tickets AS (
+    SELECT
+        DATE(UPDATED_AT)         AS resolved_dt,
+        EXECUTION_CANDIDATE_ID,
+        connection_id,
+        UPDATED_AT               AS resolved_at
+    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RECHARGE_EXECUTION_CANDIDATES
+    WHERE state = 'RESOLVED'
+      AND _FIVETRAN_ACTIVE = TRUE
+),
+joined AS (
+    SELECT
+        rt.resolved_dt,
+        rt.EXECUTION_CANDIDATE_ID,
+        rt.connection_id,
+        MAX(CASE WHEN rc.complaint_id IS NOT NULL THEN 1 ELSE 0 END) AS had_rdni
+    FROM resolved_tickets rt
+    LEFT JOIN rdni_complaints rc
+        ON  rc.connection_id  = rt.connection_id
+        AND rc.complaint_time >= rt.resolved_at
+        AND rc.complaint_time <  DATEADD(day, 3, rt.resolved_at)
+    GROUP BY rt.resolved_dt, rt.EXECUTION_CANDIDATE_ID, rt.connection_id
+)
+SELECT
+    resolved_dt,
+    COUNT(*)                                                              AS total_resolved_tickets,
+    SUM(had_rdni)                                                         AS tickets_with_rdni_within_3d,
+    ROUND(100.0 * SUM(had_rdni) / NULLIF(COUNT(*), 0), 1)               AS rdni_within_3d_pct
+FROM joined
+GROUP BY resolved_dt
+ORDER BY resolved_dt DESC
+LIMIT 10000
+"""
+
 # ── Device Ordering ──────────────────────────────────────────────
 
 QUERIES["device_ordering_health_counts"] = r"""
