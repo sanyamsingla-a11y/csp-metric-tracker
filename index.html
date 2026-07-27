@@ -298,7 +298,7 @@ function loadMetric(key, wfName, type) {
 
   const isEarnings = key.startsWith('earnings_');
   const isEarningsRaw = key === 'earnings_raw';
-  const isRates = (key.endsWith('_efficiency') && key !== 'pickup_tickets_efficiency') || key.endsWith('_health_rates') || (isEarnings && !isEarningsRaw) || key === 'device_ordering_health' || key === 'service_tickets_health';
+  const isRates = (key.endsWith('_efficiency') && key !== 'pickup_tickets_efficiency') || key.endsWith('_health_rates') || (isEarnings && !isEarningsRaw) || key === 'device_ordering_health' || key === 'service_tickets_health' || key === 'pickup_tickets_health';
   const cols = isEarnings ? COLS_EARNINGS : (key.endsWith('_funnel') || key === 'b2i_health') ? COLS_FUNNEL : isRates ? COLS_RATES : COLS_HEALTH;
   const body = document.getElementById('mainBody');
   const stClickable = key === 'service_tickets_health' ? {
