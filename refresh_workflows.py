@@ -2535,8 +2535,80 @@ ORDER BY CASE metric WHEN 'SRS reopened' THEN 1 WHEN 'TAS within 1hr' THEN 2 END
 """
 
 # ── Add more workflow queries here ────────────────────────────────
-# QUERIES["pickup_tickets_health"] = r"""..."""
-# etc.
+QUERIES["pickup_tickets_efficiency"] = r"""
+WITH params AS (SELECT DATE(CONVERT_TIMEZONE('UTC','Asia/Kolkata',CURRENT_TIMESTAMP())) AS today),
+t1 AS (
+    SELECT
+        DATE(CREATED_AT + INTERVAL '330 minutes') + 30                                     AS d,
+        EXECUTION_CANDIDATE_ID,
+        CREATED_AT,
+        MAX(CASE WHEN REASON_CODE = 'DEVICE_RECOVERED_VERIFIED' THEN 1 ELSE 0 END)         AS is_recovered,
+        MAX(CASE WHEN REASON_CODE = 'DEVICE_RESCUED'            THEN 1 ELSE 0 END)         AS is_rescued,
+        MIN(CASE WHEN REASON_CODE IN ('DEVICE_RESCUED','DEVICE_RECOVERED_VERIFIED')
+                 THEN UPDATED_AT END)                                                       AS pickup_at
+    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.NBREC_EXECUTION_CANDIDATES
+    GROUP BY 1, 2, 3
+),
+base AS (
+    SELECT
+        d,
+        CASE WHEN pickup_at < CREATED_AT + INTERVAL '30 days' THEN is_recovered ELSE 0 END   AS num,
+        1 - CASE WHEN pickup_at < CREATED_AT + INTERVAL '30 days' THEN is_rescued ELSE 0 END  AS den,
+        CASE WHEN pickup_at < CREATED_AT + INTERVAL '30 days' AND pickup_at IS NOT NULL
+             THEN ROUND(DATEDIFF('hour', CREATED_AT, pickup_at) / 24.0, 1) END               AS tat_days
+    FROM t1
+),
+tat_daily AS (
+    SELECT d,
+        ROUND(PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY tat_days), 1) AS p50,
+        ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY tat_days), 1) AS p75,
+        ROUND(PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY tat_days), 1) AS p99
+    FROM base WHERE tat_days IS NOT NULL
+    GROUP BY 1
+),
+rec_daily AS (
+    SELECT d, ROUND(100.0 * SUM(num) / NULLIF(SUM(den), 0), 1) AS val
+    FROM base GROUP BY 1
+),
+all_metrics AS (
+    SELECT 1 AS sort_order, 'P50 TAT (days)'     AS metric, d, p50 AS val FROM tat_daily
+    UNION ALL
+    SELECT 2,               'P75 TAT (days)',                d, p75        FROM tat_daily
+    UNION ALL
+    SELECT 3,               'P99 TAT (days)',                d, p99        FROM tat_daily
+    UNION ALL
+    SELECT 4,               'Recovery Rate 30d %',           d, val        FROM rec_daily
+),
+stats AS (
+    SELECT metric,
+        ROUND(AVG(val),   1) AS avg_val,
+        ROUND(MEDIAN(val),1) AS med_val,
+        ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1) AS p90_val
+    FROM all_metrics
+    WHERE d >= DATEADD('day', -90, (SELECT today FROM params))
+      AND d <  (SELECT today FROM params)
+    GROUP BY metric
+)
+SELECT
+    m.sort_order,
+    m.metric                                             AS metric,
+    MAX(CASE WHEN d = p.today   THEN m.val END)         AS "Today",
+    MAX(CASE WHEN d = p.today-1 THEN m.val END)         AS "T-1",
+    MAX(CASE WHEN d = p.today-2 THEN m.val END)         AS "T-2",
+    MAX(CASE WHEN d = p.today-3 THEN m.val END)         AS "T-3",
+    MAX(CASE WHEN d = p.today-4 THEN m.val END)         AS "T-4",
+    MAX(CASE WHEN d = p.today-5 THEN m.val END)         AS "T-5",
+    MAX(CASE WHEN d = p.today-6 THEN m.val END)         AS "T-6",
+    MAX(CASE WHEN d = p.today-7 THEN m.val END)         AS "T-7",
+    s.avg_val                                            AS "Average",
+    s.med_val                                            AS "Median",
+    s.p90_val                                            AS "P90"
+FROM all_metrics m
+CROSS JOIN params p
+LEFT JOIN stats s ON s.metric = m.metric
+GROUP BY m.sort_order, m.metric, s.avg_val, s.med_val, s.p90_val
+ORDER BY m.sort_order
+"""
 
 QUERIES["b2i_sla"] = r"""
 WITH
