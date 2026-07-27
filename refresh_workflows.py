@@ -158,14 +158,14 @@ daily_cand AS (
 )
 
 SELECT sort_ord, metric_name,
-  MAX(CASE WHEN dt = CURRENT_DATE - 1 THEN val END)                                                                         AS "Today",
-  MAX(CASE WHEN dt = CURRENT_DATE - 2 THEN val END)                                                                         AS "T-1",
-  MAX(CASE WHEN dt = CURRENT_DATE - 3 THEN val END)                                                                         AS "T-2",
-  MAX(CASE WHEN dt = CURRENT_DATE - 4 THEN val END)                                                                         AS "T-3",
-  MAX(CASE WHEN dt = CURRENT_DATE - 5 THEN val END)                                                                         AS "T-4",
-  MAX(CASE WHEN dt = CURRENT_DATE - 6 THEN val END)                                                                         AS "T-5",
-  MAX(CASE WHEN dt = CURRENT_DATE - 7 THEN val END)                                                                         AS "T-6",
-  MAX(CASE WHEN dt = CURRENT_DATE - 8 THEN val END)                                                                         AS "T-7",
+  MAX(CASE WHEN dt = CURRENT_DATE - 1 THEN val END)                                                                         AS "T-1",
+  MAX(CASE WHEN dt = CURRENT_DATE - 2 THEN val END)                                                                         AS "T-2",
+  MAX(CASE WHEN dt = CURRENT_DATE - 3 THEN val END)                                                                         AS "T-3",
+  MAX(CASE WHEN dt = CURRENT_DATE - 4 THEN val END)                                                                         AS "T-4",
+  MAX(CASE WHEN dt = CURRENT_DATE - 5 THEN val END)                                                                         AS "T-5",
+  MAX(CASE WHEN dt = CURRENT_DATE - 6 THEN val END)                                                                         AS "T-6",
+  MAX(CASE WHEN dt = CURRENT_DATE - 7 THEN val END)                                                                         AS "T-7",
+  MAX(CASE WHEN dt = CURRENT_DATE - 8 THEN val END)                                                                         AS "T-8",
   ROUND(AVG(CASE WHEN dt BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1 THEN val::FLOAT END), 1)                            AS "Average",
   MEDIAN(CASE WHEN dt BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1 THEN val::FLOAT END)                                   AS "Median",
   ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CASE WHEN dt BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1 THEN val::FLOAT END), 1) AS "P90"
