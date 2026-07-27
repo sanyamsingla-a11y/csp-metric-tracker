@@ -296,7 +296,7 @@ function loadMetric(key, wfName, type) {
 
   const isEarnings = key.startsWith('earnings_');
   const isEarningsRaw = key === 'earnings_raw';
-  const isRates = key.endsWith('_efficiency') || key.endsWith('_health_rates') || (isEarnings && !isEarningsRaw) || key === 'device_ordering_health';
+  const isRates = key.endsWith('_efficiency') || key.endsWith('_health_rates') || (isEarnings && !isEarningsRaw) || key === 'device_ordering_health' || key === 'service_tickets_health';
   const cols = isEarnings ? COLS_EARNINGS : key.endsWith('_funnel') ? COLS_FUNNEL : isRates ? COLS_RATES : COLS_HEALTH;
   const body = document.getElementById('mainBody');
   let html = (rows && rows.length > 0) ? buildTableHtml(rows, cols, isRates) : '';
