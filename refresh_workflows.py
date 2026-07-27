@@ -2250,6 +2250,290 @@ FROM daily GROUP BY category
 ORDER BY CASE category WHEN 'NO_INTERNET' THEN 1 WHEN 'RECHARGE_DONE_NO_INTERNET' THEN 2 WHEN 'OPTICAL_POWER_OUT_OF_RANGE' THEN 3 WHEN 'FREQUENT_DISCONNECTION' THEN 4 WHEN 'SLOW_INTERNET' THEN 5 ELSE 6 END
 """
 
+QUERIES["st_raw_match_rate"] = r"""
+WITH csp_universe AS (
+  SELECT DISTINCT PARTNER_ID, CSP_ID FROM PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT
+  WHERE _FIVETRAN_ACTIVE = TRUE AND STATUS = 'ACTIVE' AND PARTNER_ID IS NOT NULL
+),
+kap_base AS (
+  SELECT stm.TICKET_ID, DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) AS dt,
+    CASE
+      WHEN stm.LAST_TITLE IN ('Internet Issues | Frequent Disconnection','Internet Issues|Frequent Disconnection') THEN 'FREQUENT_DISCONNECTION'
+      WHEN stm.LAST_TITLE IN ('Internet Issues | Internet Supply Down','Internet Issues|Internet Supply Down') THEN 'NO_INTERNET'
+      WHEN stm.LAST_TITLE = 'Internet Issues|Optical Power Out of Range' THEN 'OPTICAL_POWER_OUT_OF_RANGE'
+      WHEN stm.LAST_TITLE = 'Internet Issues|Recharge done but internet not working' THEN 'RECHARGE_DONE_NO_INTERNET'
+      WHEN stm.LAST_TITLE = 'Internet Issues|Slow Speed/Range Issues' THEN 'SLOW_INTERNET'
+      ELSE 'OTHERS'
+    END AS category
+  FROM PROD_DB.PUBLIC.SERVICE_TICKET_MODEL stm
+  INNER JOIN csp_universe csp ON csp.PARTNER_ID::INT = COALESCE(stm.CURRENT_PARTNER_ACCOUNT_ID::INT, stm.LCO_ACCOUNT_ID::INT)
+  WHERE stm.TICKET_ID IS NOT NULL AND REGEXP_LIKE(stm.TICKET_ID, '^[0-9]+$')
+    AND (stm.LAST_TITLE ILIKE 'Internet Issues|%' OR stm.LAST_TITLE ILIKE 'Internet Issues |%')
+    AND DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) >= DATEADD('day', -30, CURRENT_DATE())
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY stm.TICKET_ID ORDER BY stm.TICKET_ADDED_TIME DESC) = 1
+),
+srs_ids AS (
+  SELECT DISTINCT TICKET_ID FROM PROD_DB.CSP_SUPPORT_RESOLUTION_SERVICE_CSP_SUPPORT_RESOLUTION_SERVICE.COMPLAINTS
+  WHERE _FIVETRAN_ACTIVE = TRUE AND TICKET_ID IS NOT NULL AND TICKET_ID NOT LIKE 'prod-test%' AND REGEXP_LIKE(TICKET_ID, '^[0-9]+$')
+),
+tas_ids AS (
+  SELECT DISTINCT TICKET_ID FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RESTORE_EXECUTION_CANDIDATES
+  WHERE _FIVETRAN_ACTIVE = TRUE AND TICKET_ID IS NOT NULL AND REGEXP_LIKE(TICKET_ID, '^[0-9]+$')
+),
+daily AS (
+  SELECT k.dt, k.category, COUNT(DISTINCT k.TICKET_ID) AS kap_cnt,
+    COUNT(DISTINCT CASE WHEN s.TICKET_ID IS NOT NULL THEN k.TICKET_ID END) AS srs_cnt,
+    COUNT(DISTINCT CASE WHEN t.TICKET_ID IS NOT NULL THEN k.TICKET_ID END) AS tas_cnt
+  FROM kap_base k LEFT JOIN srs_ids s ON s.TICKET_ID = k.TICKET_ID LEFT JOIN tas_ids t ON t.TICKET_ID = k.TICKET_ID
+  GROUP BY k.dt, k.category
+),
+with_pct AS (
+  SELECT *, ROUND(100.0*srs_cnt/NULLIF(kap_cnt,0),1) AS srs_pct, ROUND(100.0*tas_cnt/NULLIF(kap_cnt,0),1) AS tas_pct FROM daily
+),
+unpivoted AS (
+  SELECT dt, category, 'Kapture Count' AS metric, kap_cnt::FLOAT AS val FROM with_pct
+  UNION ALL SELECT dt, category, 'SRS Count', srs_cnt::FLOAT FROM with_pct
+  UNION ALL SELECT dt, category, 'TAS Count', tas_cnt::FLOAT FROM with_pct
+)
+SELECT category AS "Ticket Type", metric AS "Metric",
+  MAX(CASE WHEN dt=DATEADD('day',-1,CURRENT_DATE()) THEN val END) AS "T-1",
+  MAX(CASE WHEN dt=DATEADD('day',-2,CURRENT_DATE()) THEN val END) AS "T-2",
+  MAX(CASE WHEN dt=DATEADD('day',-3,CURRENT_DATE()) THEN val END) AS "T-3",
+  MAX(CASE WHEN dt=DATEADD('day',-4,CURRENT_DATE()) THEN val END) AS "T-4",
+  MAX(CASE WHEN dt=DATEADD('day',-5,CURRENT_DATE()) THEN val END) AS "T-5",
+  MAX(CASE WHEN dt=DATEADD('day',-6,CURRENT_DATE()) THEN val END) AS "T-6",
+  MAX(CASE WHEN dt=DATEADD('day',-7,CURRENT_DATE()) THEN val END) AS "T-7",
+  MAX(CASE WHEN dt=DATEADD('day',-8,CURRENT_DATE()) THEN val END) AS "T-8",
+  ROUND(AVG(val),1) AS "Mean", ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "Median",
+  ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "P90"
+FROM unpivoted GROUP BY category, metric
+ORDER BY CASE category WHEN 'OPTICAL_POWER_OUT_OF_RANGE' THEN 1 WHEN 'RECHARGE_DONE_NO_INTERNET' THEN 2 WHEN 'NO_INTERNET' THEN 3 WHEN 'FREQUENT_DISCONNECTION' THEN 4 WHEN 'SLOW_INTERNET' THEN 5 ELSE 6 END,
+  CASE metric WHEN 'Kapture Count' THEN 1 WHEN 'SRS Count' THEN 2 WHEN 'TAS Count' THEN 3 END
+"""
+
+QUERIES["st_raw_enrichment"] = r"""
+WITH csp_universe AS (
+  SELECT DISTINCT CSP_ID FROM PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT
+  WHERE _FIVETRAN_ACTIVE = TRUE AND STATUS = 'ACTIVE' AND PARTNER_ID IS NOT NULL
+),
+tas_deduped AS (
+  SELECT TICKET_ID, DATE(DATEADD(MINUTE, 330, MIN(CREATED_AT) OVER (PARTITION BY TICKET_ID))) AS dt,
+    PRIMARY_CLASS, SECONDARY_SUBTYPE, CUSTOMER_MOBILE, DEVICE_ID, CUSTOMER_ADDRESS
+  FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RESTORE_EXECUTION_CANDIDATES
+  WHERE _FIVETRAN_ACTIVE = TRUE AND TICKET_ID IS NOT NULL AND REGEXP_LIKE(TICKET_ID, '^[0-9]+$')
+    AND CSP_ID IN (SELECT CSP_ID FROM csp_universe)
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY TICKET_ID ORDER BY UPDATED_AT DESC, STATE_VERSION DESC) = 1
+),
+daily AS (
+  SELECT dt, COUNT(DISTINCT TICKET_ID) AS total_tickets,
+    COUNT(DISTINCT CASE WHEN SECONDARY_SUBTYPE IS NOT NULL AND SECONDARY_SUBTYPE != '' THEN TICKET_ID END) AS secondary_subtype_cnt,
+    COUNT(DISTINCT CASE WHEN CUSTOMER_MOBILE IS NOT NULL AND CUSTOMER_MOBILE != '' THEN TICKET_ID END) AS customer_mobile_cnt,
+    COUNT(DISTINCT CASE WHEN DEVICE_ID IS NOT NULL AND DEVICE_ID != '' THEN TICKET_ID END) AS device_id_cnt,
+    COUNT(DISTINCT CASE WHEN CUSTOMER_ADDRESS IS NOT NULL AND CUSTOMER_ADDRESS != '' THEN TICKET_ID END) AS address_cnt
+  FROM tas_deduped WHERE dt >= DATEADD('day', -30, CURRENT_DATE()) GROUP BY dt
+),
+unpivoted AS (
+  SELECT dt, 'Total tickets' AS metric, total_tickets::FLOAT AS val FROM daily
+  UNION ALL SELECT dt, 'Secondary subtype filled', secondary_subtype_cnt::FLOAT FROM daily
+  UNION ALL SELECT dt, 'Customer mobile filled', customer_mobile_cnt::FLOAT FROM daily
+  UNION ALL SELECT dt, 'Device ID filled', device_id_cnt::FLOAT FROM daily
+  UNION ALL SELECT dt, 'Address filled', address_cnt::FLOAT FROM daily
+)
+SELECT metric AS "Metric",
+  MAX(CASE WHEN dt=DATEADD('day',-1,CURRENT_DATE()) THEN val END) AS "T-1",
+  MAX(CASE WHEN dt=DATEADD('day',-2,CURRENT_DATE()) THEN val END) AS "T-2",
+  MAX(CASE WHEN dt=DATEADD('day',-3,CURRENT_DATE()) THEN val END) AS "T-3",
+  MAX(CASE WHEN dt=DATEADD('day',-4,CURRENT_DATE()) THEN val END) AS "T-4",
+  MAX(CASE WHEN dt=DATEADD('day',-5,CURRENT_DATE()) THEN val END) AS "T-5",
+  MAX(CASE WHEN dt=DATEADD('day',-6,CURRENT_DATE()) THEN val END) AS "T-6",
+  MAX(CASE WHEN dt=DATEADD('day',-7,CURRENT_DATE()) THEN val END) AS "T-7",
+  MAX(CASE WHEN dt=DATEADD('day',-8,CURRENT_DATE()) THEN val END) AS "T-8",
+  ROUND(AVG(val),1) AS "Mean", ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "Median",
+  ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "P90"
+FROM unpivoted GROUP BY metric
+ORDER BY CASE metric WHEN 'Total tickets' THEN 1 WHEN 'Secondary subtype filled' THEN 2 WHEN 'Customer mobile filled' THEN 3 WHEN 'Device ID filled' THEN 4 WHEN 'Address filled' THEN 5 END
+"""
+
+QUERIES["st_raw_closure"] = r"""
+WITH csp_universe AS (
+  SELECT DISTINCT PARTNER_ID, CSP_ID FROM PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT
+  WHERE _FIVETRAN_ACTIVE = TRUE AND STATUS = 'ACTIVE' AND PARTNER_ID IS NOT NULL
+),
+kap_base AS (
+  SELECT stm.TICKET_ID, DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) AS dt, stm.IS_RESOLVED AS kap_closed
+  FROM PROD_DB.PUBLIC.SERVICE_TICKET_MODEL stm
+  INNER JOIN csp_universe csp ON csp.PARTNER_ID::INT = COALESCE(stm.CURRENT_PARTNER_ACCOUNT_ID::INT, stm.LCO_ACCOUNT_ID::INT)
+  WHERE stm.TICKET_ID IS NOT NULL AND REGEXP_LIKE(stm.TICKET_ID, '^[0-9]+$')
+    AND (stm.LAST_TITLE ILIKE 'Internet Issues|%' OR stm.LAST_TITLE ILIKE 'Internet Issues |%')
+    AND DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) >= DATEADD('day', -30, CURRENT_DATE())
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY stm.TICKET_ID ORDER BY stm.TICKET_ADDED_TIME DESC) = 1
+),
+srs_latest AS (
+  SELECT TICKET_ID, CASE WHEN STATUS='CLOSED' THEN 1 ELSE 0 END AS srs_closed
+  FROM PROD_DB.CSP_SUPPORT_RESOLUTION_SERVICE_CSP_SUPPORT_RESOLUTION_SERVICE.COMPLAINTS
+  WHERE _FIVETRAN_ACTIVE = TRUE AND TICKET_ID IS NOT NULL AND TICKET_ID NOT LIKE 'prod-test%' AND REGEXP_LIKE(TICKET_ID, '^[0-9]+$')
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY TICKET_ID ORDER BY CREATED_AT DESC, VERSION DESC) = 1
+),
+tas_latest AS (
+  SELECT TICKET_ID, CASE WHEN STATE='COMPLETED' THEN 1 ELSE 0 END AS tas_closed
+  FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RESTORE_EXECUTION_CANDIDATES
+  WHERE _FIVETRAN_ACTIVE = TRUE AND TICKET_ID IS NOT NULL AND REGEXP_LIKE(TICKET_ID, '^[0-9]+$')
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY TICKET_ID ORDER BY UPDATED_AT DESC, STATE_VERSION DESC) = 1
+),
+joined AS (
+  SELECT k.dt, k.TICKET_ID, k.kap_closed, COALESCE(s.srs_closed,0) AS srs_closed, COALESCE(t.tas_closed,0) AS tas_closed,
+    CASE WHEN s.TICKET_ID IS NOT NULL THEN 1 ELSE 0 END AS in_srs, CASE WHEN t.TICKET_ID IS NOT NULL THEN 1 ELSE 0 END AS in_tas
+  FROM kap_base k LEFT JOIN srs_latest s ON s.TICKET_ID=k.TICKET_ID LEFT JOIN tas_latest t ON t.TICKET_ID=k.TICKET_ID
+),
+daily AS (
+  SELECT dt, SUM(kap_closed) AS kap_resolved_cnt,
+    SUM(CASE WHEN kap_closed=1 AND in_srs=1 THEN srs_closed ELSE 0 END) AS kap_closed_and_srs_closed_cnt,
+    SUM(CASE WHEN kap_closed=1 AND in_tas=1 THEN tas_closed ELSE 0 END) AS kap_closed_and_tas_completed_cnt,
+    SUM(CASE WHEN in_srs=1 AND srs_closed=1 THEN 1 ELSE 0 END) AS srs_closed_cnt,
+    SUM(CASE WHEN in_tas=1 AND tas_closed=1 THEN 1 ELSE 0 END) AS tas_completed_cnt,
+    SUM(CASE WHEN srs_closed=1 AND kap_closed=1 THEN 1 ELSE 0 END) AS srs_closed_and_kap_resolved_cnt,
+    SUM(CASE WHEN tas_closed=1 AND kap_closed=1 THEN 1 ELSE 0 END) AS tas_completed_and_kap_resolved_cnt
+  FROM joined GROUP BY dt
+),
+unpivoted AS (
+  SELECT dt, 'Kapture resolved' AS metric, kap_resolved_cnt::FLOAT AS val FROM daily
+  UNION ALL SELECT dt, 'Kap closed & SRS closed', kap_closed_and_srs_closed_cnt::FLOAT FROM daily
+  UNION ALL SELECT dt, 'Kap closed & TAS completed', kap_closed_and_tas_completed_cnt::FLOAT FROM daily
+  UNION ALL SELECT dt, 'SRS closed', srs_closed_cnt::FLOAT FROM daily
+  UNION ALL SELECT dt, 'TAS completed', tas_completed_cnt::FLOAT FROM daily
+  UNION ALL SELECT dt, 'SRS closed & Kap resolved', srs_closed_and_kap_resolved_cnt::FLOAT FROM daily
+  UNION ALL SELECT dt, 'TAS completed & Kap resolved', tas_completed_and_kap_resolved_cnt::FLOAT FROM daily
+)
+SELECT metric AS "Metric",
+  MAX(CASE WHEN dt=DATEADD('day',-1,CURRENT_DATE()) THEN val END) AS "T-1",
+  MAX(CASE WHEN dt=DATEADD('day',-2,CURRENT_DATE()) THEN val END) AS "T-2",
+  MAX(CASE WHEN dt=DATEADD('day',-3,CURRENT_DATE()) THEN val END) AS "T-3",
+  MAX(CASE WHEN dt=DATEADD('day',-4,CURRENT_DATE()) THEN val END) AS "T-4",
+  MAX(CASE WHEN dt=DATEADD('day',-5,CURRENT_DATE()) THEN val END) AS "T-5",
+  MAX(CASE WHEN dt=DATEADD('day',-6,CURRENT_DATE()) THEN val END) AS "T-6",
+  MAX(CASE WHEN dt=DATEADD('day',-7,CURRENT_DATE()) THEN val END) AS "T-7",
+  MAX(CASE WHEN dt=DATEADD('day',-8,CURRENT_DATE()) THEN val END) AS "T-8",
+  ROUND(AVG(val),1) AS "Mean", ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "Median",
+  ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "P90"
+FROM unpivoted GROUP BY metric
+ORDER BY CASE metric WHEN 'Kapture resolved' THEN 1 WHEN 'Kap closed & SRS closed' THEN 2 WHEN 'Kap closed & TAS completed' THEN 3 WHEN 'SRS closed' THEN 4 WHEN 'TAS completed' THEN 5 WHEN 'SRS closed & Kap resolved' THEN 6 WHEN 'TAS completed & Kap resolved' THEN 7 END
+"""
+
+QUERIES["st_raw_pn_delivery"] = r"""
+WITH params AS (
+  SELECT today AS d0, today-1 AS d1, today-2 AS d2, today-3 AS d3, today-4 AS d4, today-5 AS d5, today-6 AS d6, today-7 AS d7
+  FROM (SELECT DATE(CONVERT_TIMEZONE('UTC','Asia/Kolkata',CURRENT_TIMESTAMP())) AS today)
+),
+complaints AS (
+  SELECT complaint_id, TO_DATE(DATEADD(MINUTE, 330, CREATED_AT)) AS d
+  FROM PROD_DB.CSP_SUPPORT_RESOLUTION_SERVICE_CSP_SUPPORT_RESOLUTION_SERVICE.COMPLAINTS
+  WHERE _FIVETRAN_ACTIVE = TRUE AND TICKET_ID NOT LIKE 'prod-test%'
+    AND SECONDARY_SUBTYPE IN ('OPTICAL_POWER_OUT_OF_RANGE','RECHARGE_DONE_NO_INTERNET','FREQUENT_DISCONNECTION','SLOW_INTERNET','NO_INTERNET')
+),
+tickets AS (SELECT d, COUNT(*) AS cnt FROM complaints GROUP BY 1),
+csp_pn AS (
+  SELECT c.d, COUNT(DISTINCT pn.exec_cand_id) AS cnt
+  FROM (
+    SELECT PARSE_JSON(properties):execution_id::STRING AS exec_cand_id
+    FROM PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA ed
+    JOIN PROD_DB.CLEVERTAP_CSP_API.PROFILE_DATA pd ON ed.clevertap_id = pd.clevertap_id
+    WHERE ed.event_name = 'pn_delivered' AND PARSE_JSON(properties):wzrk_id::STRING LIKE '1778236503%'
+  ) pn
+  JOIN PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RESTORE_EXECUTION_CANDIDATES rec ON pn.exec_cand_id = rec.EXECUTION_CANDIDATE_ID
+  JOIN complaints c ON rec.COMPLAINT_ID = c.complaint_id
+  GROUP BY 1
+),
+long AS (
+  SELECT 1 AS metric_order, 'Tickets Created' AS metric, d, cnt::FLOAT AS val FROM tickets
+  UNION ALL SELECT 2, 'CSP PN Delivered', d, cnt::FLOAT FROM csp_pn
+)
+SELECT metric AS "Metric",
+  MAX(IFF(d=p.d0,val,NULL)) AS "Today",
+  MAX(IFF(d=p.d1,val,NULL)) AS "T-1",
+  MAX(IFF(d=p.d2,val,NULL)) AS "T-2",
+  MAX(IFF(d=p.d3,val,NULL)) AS "T-3",
+  MAX(IFF(d=p.d4,val,NULL)) AS "T-4",
+  MAX(IFF(d=p.d5,val,NULL)) AS "T-5",
+  MAX(IFF(d=p.d6,val,NULL)) AS "T-6",
+  MAX(IFF(d=p.d7,val,NULL)) AS "T-7",
+  ROUND(AVG(IFF(d BETWEEN p.d7 AND p.d0, val, NULL)),1) AS "Average",
+  ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.d7 AND p.d0, val, NULL)),1) AS "Median",
+  ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.d7 AND p.d0, val, NULL)),1) AS "P90"
+FROM long CROSS JOIN params p
+GROUP BY metric_order, metric ORDER BY metric_order
+"""
+
+QUERIES["st_raw_shifting_address"] = r"""
+WITH daily AS (
+  SELECT DATEDIFF(day, TO_DATE(DATEADD(minute, 330, CREATED_AT)), CAST(DATEADD(minute, 330, CURRENT_TIMESTAMP()) AS DATE)) AS DAYS_AGO,
+    COUNT(*) AS shifting_tickets,
+    SUM(CASE WHEN PARSE_JSON(NEW_ADDRESS):address::STRING IS NOT NULL AND PARSE_JSON(NEW_ADDRESS):address::STRING <> '' THEN 1 ELSE 0 END) AS address_filled
+  FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RESTORE_EXECUTION_CANDIDATES
+  WHERE _FIVETRAN_ACTIVE AND SECONDARY_SUBTYPE IN ('NEW_PREMISES','WITHIN_PREMISES')
+    AND TO_DATE(DATEADD(minute, 330, CREATED_AT)) >= DATEADD(day, -30, CAST(DATEADD(minute, 330, CURRENT_TIMESTAMP()) AS DATE))
+  GROUP BY DAYS_AGO
+),
+unpivoted AS (
+  SELECT DAYS_AGO, 'Shifting tickets created' AS metric, shifting_tickets::FLOAT AS val FROM daily
+  UNION ALL SELECT DAYS_AGO, 'Address filled', address_filled::FLOAT FROM daily
+)
+SELECT metric AS "Metric",
+  MAX(CASE WHEN DAYS_AGO=1 THEN val END) AS "T-1",
+  MAX(CASE WHEN DAYS_AGO=2 THEN val END) AS "T-2",
+  MAX(CASE WHEN DAYS_AGO=3 THEN val END) AS "T-3",
+  MAX(CASE WHEN DAYS_AGO=4 THEN val END) AS "T-4",
+  MAX(CASE WHEN DAYS_AGO=5 THEN val END) AS "T-5",
+  MAX(CASE WHEN DAYS_AGO=6 THEN val END) AS "T-6",
+  MAX(CASE WHEN DAYS_AGO=7 THEN val END) AS "T-7",
+  MAX(CASE WHEN DAYS_AGO=8 THEN val END) AS "T-8",
+  ROUND(AVG(val),1) AS "Mean", ROUND(MEDIAN(val),1) AS "Median",
+  ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "P90"
+FROM unpivoted GROUP BY metric
+ORDER BY CASE metric WHEN 'Shifting tickets created' THEN 1 WHEN 'Address filled' THEN 2 END
+"""
+
+QUERIES["st_raw_reopen"] = r"""
+WITH csp_universe AS (
+  SELECT DISTINCT CSP_ID FROM PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT
+  WHERE _FIVETRAN_ACTIVE = TRUE AND STATUS = 'ACTIVE' AND PARTNER_ID IS NOT NULL
+),
+srs_reopens AS (
+  SELECT COMPLAINT_ID, TICKET_ID, CREATED_AT AS srs_created_at, DATE(CONVERT_TIMEZONE('Asia/Kolkata', CREATED_AT)) AS dt
+  FROM PROD_DB.CSP_SUPPORT_RESOLUTION_SERVICE_CSP_SUPPORT_RESOLUTION_SERVICE.COMPLAINTS
+  WHERE _FIVETRAN_ACTIVE = TRUE AND IS_REOPEN = TRUE AND COMPLAINT_ID IS NOT NULL AND TICKET_ID IS NOT NULL
+    AND TICKET_ID NOT LIKE 'prod-test%' AND REGEXP_LIKE(TICKET_ID, '^[0-9]+$')
+    AND CSP_ID IN (SELECT CSP_ID FROM csp_universe)
+    AND DATE(CONVERT_TIMEZONE('Asia/Kolkata', CREATED_AT)) >= DATEADD('day', -30, CURRENT_DATE())
+),
+tas_by_complaint AS (
+  SELECT COMPLAINT_ID, MIN(CREATED_AT) AS tas_created_at
+  FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RESTORE_EXECUTION_CANDIDATES
+  WHERE COMPLAINT_ID IS NOT NULL GROUP BY COMPLAINT_ID
+),
+daily AS (
+  SELECT s.dt, COUNT(DISTINCT s.COMPLAINT_ID) AS srs_reopen_cnt,
+    COUNT(DISTINCT CASE WHEN t.COMPLAINT_ID IS NOT NULL AND ABS(DATEDIFF('minute', s.srs_created_at, t.tas_created_at)) <= 60 THEN s.COMPLAINT_ID END) AS tas_within_1hr_cnt
+  FROM srs_reopens s LEFT JOIN tas_by_complaint t ON t.COMPLAINT_ID = s.COMPLAINT_ID GROUP BY s.dt
+),
+unpivoted AS (
+  SELECT dt, 'SRS reopened' AS metric, srs_reopen_cnt::FLOAT AS val FROM daily
+  UNION ALL SELECT dt, 'TAS within 1hr', tas_within_1hr_cnt::FLOAT FROM daily
+)
+SELECT metric AS "Metric",
+  MAX(CASE WHEN dt=DATEADD('day',-1,CURRENT_DATE()) THEN val END) AS "T-1",
+  MAX(CASE WHEN dt=DATEADD('day',-2,CURRENT_DATE()) THEN val END) AS "T-2",
+  MAX(CASE WHEN dt=DATEADD('day',-3,CURRENT_DATE()) THEN val END) AS "T-3",
+  MAX(CASE WHEN dt=DATEADD('day',-4,CURRENT_DATE()) THEN val END) AS "T-4",
+  MAX(CASE WHEN dt=DATEADD('day',-5,CURRENT_DATE()) THEN val END) AS "T-5",
+  MAX(CASE WHEN dt=DATEADD('day',-6,CURRENT_DATE()) THEN val END) AS "T-6",
+  MAX(CASE WHEN dt=DATEADD('day',-7,CURRENT_DATE()) THEN val END) AS "T-7",
+  MAX(CASE WHEN dt=DATEADD('day',-8,CURRENT_DATE()) THEN val END) AS "T-8",
+  ROUND(AVG(val),1) AS "Mean", ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "Median",
+  ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "P90"
+FROM unpivoted GROUP BY metric
+ORDER BY CASE metric WHEN 'SRS reopened' THEN 1 WHEN 'TAS within 1hr' THEN 2 END
+"""
+
 # ── Add more workflow queries here ────────────────────────────────
 # QUERIES["pickup_tickets_health"] = r"""..."""
 # etc.

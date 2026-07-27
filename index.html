@@ -289,7 +289,7 @@ function loadMetric(key, wfName, type) {
 
   const rows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[key] : null;
 
-  const hasSubtables = key === 'isp_recharge_efficiency';
+  const hasSubtables = key === 'isp_recharge_efficiency' || key === 'service_tickets_raw';
   if ((!rows || rows.length === 0) && !hasSubtables) {
     document.getElementById('mainBody').innerHTML =
       '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
@@ -389,6 +389,27 @@ function loadMetric(key, wfName, type) {
              '<div class="section-label">Match Rates (%)</div>' +
              html;
     }
+  }
+
+  if (key === 'service_tickets_raw') {
+    const RAW_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'];
+    const rawSections = [
+      { key: 'st_raw_match_rate',    title: 'Match Rate — by Ticket Type (Counts)',     multi: true, labelCols: ['Ticket Type','Metric'] },
+      { key: 'st_raw_enrichment',    title: 'Enrichment — Field-Level Counts',          multi: false },
+      { key: 'st_raw_closure',       title: 'Closure — Directional Counts',             multi: false },
+      { key: 'st_raw_pn_delivery',   title: 'PN Delivery — Tickets vs CSP PN Delivered', multi: false, cols: COLS_HEALTH },
+      { key: 'st_raw_shifting_address', title: 'Shifting Address — Counts',             multi: false },
+      { key: 'st_raw_reopen',        title: 'Reopen — SRS Reopened vs TAS Within 1hr',  multi: false },
+    ];
+    rawSections.forEach((sec, i) => {
+      const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[sec.key] : null;
+      if (d && d.length > 0) {
+        const mt = i === 0 ? '' : ' style="margin-top:36px"';
+        html += '<div class="section-label"' + mt + '>' + sec.title + '</div>';
+        const c = sec.cols || RAW_COLS;
+        html += sec.multi ? buildMultiLabelTableHtml(d, sec.labelCols, c, false) : buildTableHtml(d, c, false);
+      }
+    });
   }
 
   if (key === 'service_tickets_health') {
