@@ -131,6 +131,10 @@ tbody tr.row-section td:first-child { text-transform: uppercase; }
 }
 .section-label:first-child { margin-top: 0; }
 
+/* ── Clickable metric ── */
+.metric-link { color: var(--accent-ink); cursor: pointer; text-decoration: underline; text-decoration-color: var(--border); text-underline-offset: 2px; }
+.metric-link:hover { text-decoration-color: var(--accent-ink); }
+
 /* ── No data ── */
 .no-data {
   text-align: center; padding: 60px 20px; color: var(--faint); font-size: 12.5px;
@@ -223,7 +227,7 @@ tbody tr.row-section td:first-child { text-transform: uppercase; }
 <script>
 const WORKFLOWS = [
   { id: 'b2i',              name: 'Booking to Install', health: 'b2i_health',              efficiency: 'b2i_efficiency',             raw: 'b2i_funnel' },
-  { id: 'service_tickets',  name: 'Service Tickets',    health: 'service_tickets_health',  efficiency: 'service_tickets_efficiency' },
+  { id: 'service_tickets',  name: 'Service Tickets',    health: 'service_tickets_health',  raw: 'service_tickets_raw' },
   { id: 'pickup_tickets',   name: 'Pickup Tickets',     health: 'pickup_tickets_health',   efficiency: 'pickup_tickets_efficiency' },
   { id: 'isp_recharge',     name: 'ISP Recharge',       health: 'isp_recharge_health',     efficiency: 'isp_recharge_efficiency' },
   { id: 'quality',          name: 'Quality',            health: 'quality_health',          efficiency: 'quality_efficiency' },
@@ -254,9 +258,7 @@ function buildSidebar() {
         <div class="wf-item" data-key="${wf.health}" onclick="loadMetric('${wf.health}', '${wf.name}', 'Health')">
           <span class="dot-health"></span> Health
         </div>
-        <div class="wf-item" data-key="${wf.efficiency}" onclick="loadMetric('${wf.efficiency}', '${wf.name}', 'Efficiency')">
-          <span class="dot-efficiency"></span> Efficiency
-        </div>
+        ${wf.efficiency ? '<div class="wf-item" data-key="' + wf.efficiency + '" onclick="loadMetric(\'' + wf.efficiency + '\', \'' + wf.name + '\', \'Efficiency\')"><span class="dot-efficiency"></span> Efficiency</div>' : ''}
         ${wf.raw ? '<div class="wf-item" data-key="' + wf.raw + '" onclick="loadMetric(\'' + wf.raw + '\', \'' + wf.name + '\', \'Raw\')"><span class="dot-funnel"></span> Raw</div>' : ''}
       </div>
     </div>
@@ -299,7 +301,13 @@ function loadMetric(key, wfName, type) {
   const isRates = key.endsWith('_efficiency') || key.endsWith('_health_rates') || (isEarnings && !isEarningsRaw) || key === 'device_ordering_health' || key === 'service_tickets_health';
   const cols = isEarnings ? COLS_EARNINGS : (key.endsWith('_funnel') || key === 'b2i_health') ? COLS_FUNNEL : isRates ? COLS_RATES : COLS_HEALTH;
   const body = document.getElementById('mainBody');
-  let html = (rows && rows.length > 0) ? buildTableHtml(rows, cols, isRates) : '';
+  const stClickable = key === 'service_tickets_health' ? {
+    'Service Ticket (Kapture-SRS-TAS) Match Rate': 'st-detail-match',
+    'Enrichment Rate': 'st-detail-enrichment',
+    'Ticket Closure Match Rate': 'st-detail-closure',
+    'TAT Calculation Accuracy': 'st-detail-tat'
+  } : null;
+  let html = (rows && rows.length > 0) ? buildTableHtml(rows, cols, isRates, stClickable) : '';
 
   if (key === 'earnings_health') {
     const sub = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['earnings_health_sync_breakup'] : null;
@@ -383,6 +391,30 @@ function loadMetric(key, wfName, type) {
     }
   }
 
+  if (key === 'service_tickets_health') {
+    const DATA_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'];
+    const matchRate = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['st_detail_match_rate'] : null;
+    if (matchRate && matchRate.length > 0) {
+      html += '<div id="st-detail-match" class="section-label" style="margin-top:36px">Service Ticket (Kapture-SRS-TAS) Match Rate — by Ticket Type</div>';
+      html += buildMultiLabelTableHtml(matchRate, ['Ticket Type','Metric'], DATA_COLS, true);
+    }
+    const enrichment = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['st_detail_enrichment'] : null;
+    if (enrichment && enrichment.length > 0) {
+      html += '<div id="st-detail-enrichment" class="section-label" style="margin-top:36px">Enrichment Rate — Field-Level Breakdown</div>';
+      html += buildTableHtml(enrichment, DATA_COLS, false);
+    }
+    const closure = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['st_detail_closure'] : null;
+    if (closure && closure.length > 0) {
+      html += '<div id="st-detail-closure" class="section-label" style="margin-top:36px">Ticket Closure Match Rate — Directional Breakdown</div>';
+      html += buildTableHtml(closure, DATA_COLS, false);
+    }
+    const tatAcc = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['st_detail_tat_accuracy'] : null;
+    if (tatAcc && tatAcc.length > 0) {
+      html += '<div id="st-detail-tat" class="section-label" style="margin-top:36px">TAT Calculation Accuracy — by Category</div>';
+      html += buildMultiLabelTableHtml(tatAcc, ['Category','Rule'], DATA_COLS, true);
+    }
+  }
+
   body.innerHTML = html;
 }
 
@@ -450,7 +482,7 @@ function fmt(val) {
   return n.toLocaleString('en-IN', { maximumFractionDigits: 1 });
 }
 
-function buildTableHtml(rows, cols, pct) {
+function buildTableHtml(rows, cols, pct, clickable) {
   let html = '<div class="table-wrap"><table><thead><tr>';
   html += '<th>Metric</th>';
   cols.forEach(c => {
@@ -460,14 +492,15 @@ function buildTableHtml(rows, cols, pct) {
   html += '</tr></thead><tbody>';
 
   for (const row of rows) {
-    const name = row.METRIC_NAME || row.metric_name || row.metric || row.METRIC || row.entry_type || row.ENTRY_TYPE || '';
+    const name = row.METRIC_NAME || row.metric_name || row.metric || row.METRIC || row.Metric || row.entry_type || row.ENTRY_TYPE || '';
     const isSection = name.startsWith('---');
     if (isSection) {
       html += '<tr class="row-section"><td colspan="' + (cols.length + 1) + '">' + name.replace(/^-+\s*/, '') + '</td></tr>';
       continue;
     }
     html += '<tr>';
-    html += '<td>' + name + '</td>';
+    const anchor = clickable && clickable[name];
+    html += '<td>' + (anchor ? '<span class="metric-link" onclick="document.getElementById(\'' + anchor + '\').scrollIntoView({behavior:\'smooth\',block:\'start\'})">' + name + ' ↓</span>' : name) + '</td>';
     cols.forEach(c => {
       const v = row[c] ?? row[c.toUpperCase()] ?? '';
       html += '<td>' + fmt(v) + (pct && v !== null && v !== undefined && v !== '' ? '%' : '') + '</td>';
@@ -475,6 +508,28 @@ function buildTableHtml(rows, cols, pct) {
     html += '</tr>';
   }
 
+  html += '</tbody></table></div>';
+  return html;
+}
+
+function buildMultiLabelTableHtml(rows, labelCols, dataCols, pct) {
+  if (!rows || rows.length === 0) return '';
+  let html = '<div class="table-wrap"><table><thead><tr>';
+  labelCols.forEach(c => { html += '<th style="text-align:left">' + c + '</th>'; });
+  dataCols.forEach(c => {
+    const cls = ['Mean','Median','P90'].includes(c) ? ' class="col-stat"' : '';
+    html += '<th' + cls + '>' + c + '</th>';
+  });
+  html += '</tr></thead><tbody>';
+  for (const row of rows) {
+    html += '<tr>';
+    labelCols.forEach(c => { html += '<td style="text-align:left;font-weight:500">' + (row[c] || '') + '</td>'; });
+    dataCols.forEach(c => {
+      const v = row[c] ?? '';
+      html += '<td>' + fmt(v) + (pct && v !== null && v !== undefined && v !== '' ? '%' : '') + '</td>';
+    });
+    html += '</tr>';
+  }
   html += '</tbody></table></div>';
   return html;
 }
