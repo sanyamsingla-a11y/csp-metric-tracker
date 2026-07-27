@@ -1386,15 +1386,15 @@ FROM (
     cm_d0, cm_d1, cm_d2, cm_d3, cm_d4, cm_d5, cm_d6, cm_d7, cm_avg, cm_med, cm_p90
   FROM commission_agg
   UNION ALL
-  SELECT 5, 'NBREC - Failed',
+  SELECT 5, 'NBREC - Failed (CX Recharged after 21 days of PUT creation)',
     nb_d0, nb_d1, nb_d2, nb_d3, nb_d4, nb_d5, nb_d6, nb_d7, nb_avg, nb_med, nb_p90
   FROM nbrec_agg
   UNION ALL
-  SELECT 6, 'ACS - Deployed within 1d',
+  SELECT 6, 'ACS - Deployed within 1d (CX Recharged after 21 days of PUT creation)',
     acs_d0, acs_d1, acs_d2, acs_d3, acs_d4, acs_d5, acs_d6, acs_d7, acs_avg, acs_med, acs_p90
   FROM nbrec_agg
   UNION ALL
-  SELECT 7, 'CLOS - Active within 1d',
+  SELECT 7, 'CLOS - Active within 1d (CX Recharged after 21 days of PUT creation)',
     cl_d0, cl_d1, cl_d2, cl_d3, cl_d4, cl_d5, cl_d6, cl_d7, cl_avg, cl_med, cl_p90
   FROM nbrec_agg
 ) x
