@@ -1,4 +1,4 @@
--- Success in subsequent attempts
+-- Success in subsequent attempts (denominator = all withdrawals, aligned with q7)
 WITH params AS (
     SELECT CONVERT_TIMEZONE('Asia/Kolkata', CURRENT_TIMESTAMP())::DATE AS today
 ),
@@ -44,7 +44,7 @@ retry_counts AS (
     WHERE NOT _fivetran_deleted
     GROUP BY withdrawal_id
 ),
-outcomes AS (
+classified AS (
     SELECT
         l.debit_date,
         CASE
@@ -59,17 +59,24 @@ outcomes AS (
         END AS sort_order
     FROM led l
     LEFT JOIN retry_counts r ON r.withdrawal_id = l.withdrawal_id
-    WHERE (r.withdrawal_id IS NULL OR r.final_status = 'processed')
+),
+period_totals AS (
+    SELECT p.period_name, COUNT(l.withdrawal_id) AS total
+    FROM periods p
+    LEFT JOIN led l ON l.debit_date BETWEEN p.start_date AND p.end_date
+    GROUP BY p.period_name
 ),
 period_stats AS (
     SELECT
         p.period_name,
-        o.metric,
-        o.sort_order,
-        ROUND(100.0 * COUNT(*) / NULLIF(SUM(COUNT(*)) OVER (PARTITION BY p.period_name), 0), 2) AS val
+        c.metric,
+        c.sort_order,
+        ROUND(100.0 * COUNT(*) / NULLIF(pt.total, 0), 2) AS val
     FROM periods p
-    JOIN outcomes o ON o.debit_date BETWEEN p.start_date AND p.end_date
-    GROUP BY p.period_name, o.metric, o.sort_order
+    JOIN classified c ON c.debit_date BETWEEN p.start_date AND p.end_date
+    JOIN period_totals pt ON pt.period_name = p.period_name
+    WHERE c.metric IS NOT NULL
+    GROUP BY p.period_name, c.metric, c.sort_order, pt.total
 )
 SELECT
     metric                                                           AS "Metric",
