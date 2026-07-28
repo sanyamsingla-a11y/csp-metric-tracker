@@ -289,7 +289,7 @@ function loadMetric(key, wfName, type) {
 
   const rows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[key] : null;
 
-  const hasSubtables = key === 'isp_recharge_efficiency' || key === 'service_tickets_raw';
+  const hasSubtables = key === 'isp_recharge_efficiency' || key === 'service_tickets_raw' || key === 'pickup_tickets_raw';
   if ((!rows || rows.length === 0) && !hasSubtables) {
     document.getElementById('mainBody').innerHTML =
       '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
@@ -413,6 +413,29 @@ function loadMetric(key, wfName, type) {
         html += '<div class="section-label"' + mt + '>' + sec.title + '</div>';
         const c = sec.cols || RAW_COLS;
         html += sec.multi ? buildMultiLabelTableHtml(d, sec.labelCols, c, false) : buildTableHtml(d, c, false);
+      }
+    });
+  }
+
+  if (key === 'pickup_tickets_raw') {
+    const PUT_RAW_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'];
+    const putRawSections = [
+      { key: 'put_raw_creation_alignment', title: '1. PUT Creation State Alignment',               daily: true },
+      { key: 'put_raw_closure_recharge',   title: '2. PUT Closure (Recharge Done) State Alignment', daily: true },
+      { key: 'put_raw_expiry',             title: '3. PUT Expiry State Alignment',                  daily: true },
+      { key: 'put_raw_closure_pickup',     title: '4. PUT Closure (Pickup Done) State Alignment',   daily: true },
+      { key: 'put_raw_payout',             title: '5. Pickup Done vs Payout Made',                  daily: true },
+      { key: 'put_raw_device_lost',        title: '6. Device Lost → Recoverable Due',         daily: true },
+      { key: 'put_raw_closed_within_1h',   title: '7. Recharge Done → PUT Closed Within 1h',  daily: true },
+      { key: 'put_raw_sd_nbrec',           title: '8. Security Deposit → NBREC Match Rate',   daily: false },
+      { key: 'put_raw_creation_rate',      title: '9. PUT Creation Rate',                           daily: false },
+    ];
+    putRawSections.forEach((sec, i) => {
+      const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[sec.key] : null;
+      if (d && d.length > 0) {
+        const mt = i === 0 ? '' : ' style="margin-top:36px"';
+        html += '<div class="section-label"' + mt + '>' + sec.title + '</div>';
+        html += sec.daily ? buildDailyTableHtml(d) : buildTableHtml(d, PUT_RAW_COLS, false);
       }
     });
   }

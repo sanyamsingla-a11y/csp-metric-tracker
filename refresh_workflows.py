@@ -3093,6 +3093,366 @@ SELECT 'PUT Creation Rate',
 FROM pivot_9
 """
 
+QUERIES["put_raw_creation_alignment"] = r"""
+WITH nbrec_created AS (
+    SELECT n.EXECUTION_CANDIDATE_ID, n.DEVICE_ID, n.LAST_CONNECTION_ID,
+        n.created_at AS nbrec_created_at,
+        DATE(n.created_at + INTERVAL '330 minutes') AS created_dt
+    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.NBREC_EXECUTION_CANDIDATES n
+    WHERE n._fivetran_active AND n.created_at >= CURRENT_DATE - 60
+),
+acs_transition AS (
+    SELECT cal.device_id, cal.created_at AS acs_transition_at
+    FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.CUSTODY_AUDIT_LOG cal
+    WHERE cal.to_state = 'CUSTOMER_RECOVERY_PENDING' AND cal.created_at >= CURRENT_DATE - 61
+),
+clos_transition AS (
+    SELECT ceh.connection_id, ceh.created_at AS clos_transition_at
+    FROM PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTION_EVENT_HISTORY ceh
+    WHERE ceh.RESULTING_STATE = 'PENDING_DEACTIVATION' AND ceh.created_at >= CURRENT_DATE - 61
+)
+SELECT nc.created_dt AS PUT_CREATED_AT, COUNT(*) AS NBREC_puts,
+    COUNT(CASE WHEN at2.acs_transition_at IS NOT NULL
+        AND ABS(DATEDIFF(day, nc.nbrec_created_at, at2.acs_transition_at)) <= 1 THEN 1 END) AS acs_cust_rec_pend_within_1d,
+    COUNT(CASE WHEN ct.clos_transition_at IS NOT NULL
+        AND ABS(DATEDIFF(day, nc.nbrec_created_at, ct.clos_transition_at)) <= 1 THEN 1 END) AS clos_pend_deact_within_1d
+FROM nbrec_created nc
+LEFT JOIN acs_transition at2 ON at2.device_id = nc.device_id
+    AND ABS(DATEDIFF(day, nc.nbrec_created_at, at2.acs_transition_at)) <= 1
+LEFT JOIN clos_transition ct ON ct.connection_id = nc.LAST_CONNECTION_ID
+    AND ABS(DATEDIFF(day, nc.nbrec_created_at, ct.clos_transition_at)) <= 1
+GROUP BY 1 ORDER BY 1 desc
+"""
+
+QUERIES["put_raw_closure_recharge"] = r"""
+WITH rescued AS (
+    SELECT n.EXECUTION_CANDIDATE_ID, n.DEVICE_ID, n.LAST_CONNECTION_ID,
+        n.updated_at AS rescued_at,
+        DATE(n.updated_at + INTERVAL '330 minutes') AS recharged_dt
+    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.NBREC_EXECUTION_CANDIDATES n
+    WHERE n._fivetran_active AND n.state = 'CANCELLED' AND n.reason_code = 'DEVICE_RESCUED'
+        AND n.updated_at >= CURRENT_DATE - 60
+),
+acs_transition AS (
+    SELECT cal.device_id, cal.created_at AS acs_transition_at
+    FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.CUSTODY_AUDIT_LOG cal
+    WHERE cal.to_state = 'DEPLOYED' AND cal.created_at >= CURRENT_DATE - 61
+),
+clos_transition AS (
+    SELECT ceh.connection_id, ceh.created_at AS clos_transition_at
+    FROM PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTION_EVENT_HISTORY ceh
+    WHERE ceh.RESULTING_STATE IN ('ACTIVE','PAUSED') AND ceh.created_at >= CURRENT_DATE - 61
+)
+SELECT r.recharged_dt, COUNT(*) AS nbec_cancelled,
+    COUNT(CASE WHEN at2.acs_transition_at IS NOT NULL
+        AND ABS(DATEDIFF(day, r.rescued_at, at2.acs_transition_at)) <= 1 THEN 1 END) AS acs_deployed_within_1d,
+    COUNT(CASE WHEN ct.clos_transition_at IS NOT NULL
+        AND ABS(DATEDIFF(day, r.rescued_at, ct.clos_transition_at)) <= 1 THEN 1 END) AS clos_active_within_1d
+FROM rescued r
+LEFT JOIN acs_transition at2 ON at2.device_id = r.device_id
+    AND ABS(DATEDIFF(day, r.rescued_at, at2.acs_transition_at)) <= 1
+LEFT JOIN clos_transition ct ON ct.connection_id = r.LAST_CONNECTION_ID
+    AND ABS(DATEDIFF(day, r.rescued_at, ct.clos_transition_at)) <= 1
+GROUP BY 1 ORDER BY 1 desc
+"""
+
+QUERIES["put_raw_expiry"] = r"""
+WITH failed_nbrec AS (
+    SELECT n.EXECUTION_CANDIDATE_ID, n.DEVICE_ID, n.LAST_CONNECTION_ID,
+        n.CREATED_AT AS ticket_created_at, n.UPDATED_AT AS failed_at,
+        DATE(DATEADD(MINUTE, 330, n.CREATED_AT)) AS created_dt
+    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.NBREC_EXECUTION_CANDIDATES n
+    WHERE n._FIVETRAN_ACTIVE AND n.STATE = 'FAILED'
+      AND n.CREATED_AT >= CURRENT_DATE - 90 AND n.CREATED_AT <= CURRENT_DATE - 1
+),
+acs_lost AS (
+    SELECT DEVICE_ID, CREATED_AT AS lost_at
+    FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.CUSTODY_AUDIT_LOG
+    WHERE TO_STATE = 'LOST'
+),
+clos_pd AS (
+    SELECT CONNECTION_ID, CREATED_AT AS pd_at
+    FROM PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTION_EVENT_HISTORY
+    WHERE RESULTING_STATE = 'PENDING_DEACTIVATION'
+)
+SELECT f.created_dt,
+    COUNT(DISTINCT f.EXECUTION_CANDIDATE_ID) AS failed_nbrec,
+    COUNT(DISTINCT CASE WHEN al.DEVICE_ID IS NOT NULL THEN f.EXECUTION_CANDIDATE_ID END) AS acs_lost,
+    COUNT(DISTINCT CASE WHEN cp.CONNECTION_ID IS NOT NULL THEN f.EXECUTION_CANDIDATE_ID END) AS clos_pending_deactivation
+FROM failed_nbrec f
+LEFT JOIN acs_lost al ON al.DEVICE_ID = f.DEVICE_ID
+    AND ABS(DATEDIFF('minute', al.lost_at, f.failed_at)) <= 120
+LEFT JOIN clos_pd cp ON cp.CONNECTION_ID = f.LAST_CONNECTION_ID
+    AND ABS(DATEDIFF('hour', cp.pd_at, f.ticket_created_at)) <= 1
+GROUP BY 1 ORDER BY 1 DESC LIMIT 8
+"""
+
+QUERIES["put_raw_closure_pickup"] = r"""
+WITH completed AS (
+    SELECT n.EXECUTION_CANDIDATE_ID, n.DEVICE_ID, n.LAST_CONNECTION_ID,
+        n.updated_at AS completed_at,
+        DATE(n.updated_at + INTERVAL '330 minutes') AS completed_dt
+    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.NBREC_EXECUTION_CANDIDATES n
+    WHERE n._fivetran_active AND n.state = 'COMPLETED' AND n.updated_at >= CURRENT_DATE - 60
+),
+acs_transition AS (
+    SELECT cal.device_id, cal.created_at AS acs_transition_at
+    FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.CUSTODY_AUDIT_LOG cal
+    WHERE cal.to_state = 'IDLE' AND cal.created_at >= CURRENT_DATE - 61
+),
+clos_transition AS (
+    SELECT ceh.connection_id, ceh.created_at AS clos_transition_at
+    FROM PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTION_EVENT_HISTORY ceh
+    WHERE ceh.RESULTING_STATE = 'PENDING_DEACTIVATION' AND ceh.created_at >= CURRENT_DATE - 61
+)
+SELECT c.completed_dt, COUNT(*) AS NBREC_completed,
+    COUNT(CASE WHEN at2.acs_transition_at IS NOT NULL
+        AND ABS(DATEDIFF(day, c.completed_at, at2.acs_transition_at)) <= 1 THEN 1 END) AS acs_idle_within_1d,
+    COUNT(CASE WHEN ct.clos_transition_at IS NOT NULL
+        AND ABS(DATEDIFF(day, c.completed_at, ct.clos_transition_at)) <= 1 THEN 1 END) AS clos_deact_within_1d
+FROM completed c
+LEFT JOIN acs_transition at2 ON at2.device_id = c.device_id
+    AND ABS(DATEDIFF(day, c.completed_at, at2.acs_transition_at)) <= 1
+LEFT JOIN clos_transition ct ON ct.connection_id = c.LAST_CONNECTION_ID
+    AND ABS(DATEDIFF(day, c.completed_at, ct.clos_transition_at)) <= 1
+GROUP BY 1 ORDER BY 1 desc
+"""
+
+QUERIES["put_raw_payout"] = r"""
+WITH completed_pickups AS (
+    SELECT n.EXECUTION_CANDIDATE_ID, n.DEVICE_ID,
+        n.updated_at AS completed_at,
+        DATE(n.updated_at + INTERVAL '330 minutes') AS completed_dt
+    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.NBREC_EXECUTION_CANDIDATES n
+    WHERE n._fivetran_active AND n.state = 'COMPLETED' AND n.reason_code = 'DEVICE_RECOVERED_VERIFIED'
+        AND n.updated_at >= CURRENT_DATE - 60
+)
+SELECT cp.completed_dt,
+    COUNT(DISTINCT cp.EXECUTION_CANDIDATE_ID) AS total_pickups,
+    COUNT(DISTINCT w.ID) AS total_payments,
+    SUM(COALESCE(round(w.AMOUNT/100,0), 0)) AS total_amount
+FROM completed_pickups cp
+LEFT JOIN PROD_DB.CSP_PAYMENT_SETTLEMENT_SERVICE_CSP_PAYMENT_SETTLEMENT_SERVICE.WALLET_LEDGER_ENTRIES w
+    ON w.ENTRY_TYPE IN ('RECOVERY_RETURN','RECOVERY_PICKUP')
+    AND w._fivetran_active
+    AND cp.DEVICE_ID = PARSE_JSON(w.REMARKS):"device_id"::STRING
+    AND ABS(DATEDIFF(day, cp.completed_at, w.created_at)) <= 1
+GROUP BY 1 ORDER BY 1 desc
+"""
+
+QUERIES["put_raw_device_lost"] = r"""
+WITH expired_puts AS (
+    SELECT n.EXECUTION_CANDIDATE_ID, n.DEVICE_ID, n.LAST_CONNECTION_ID,
+        n.updated_at AS expired_at,
+        DATE(n.updated_at + INTERVAL '330 minutes') AS expired_dt
+    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.NBREC_EXECUTION_CANDIDATES n
+    WHERE n._FIVETRAN_ACTIVE AND n.STATE = 'FAILED' AND n.UPDATED_AT >= CURRENT_DATE - 60
+),
+acs_lost AS (
+    SELECT cal.DEVICE_ID, cal.CREATED_AT AS lost_at
+    FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.CUSTODY_AUDIT_LOG cal
+    WHERE cal.TO_STATE = 'LOST' AND cal.CREATED_AT >= CURRENT_DATE - 61
+)
+SELECT ep.expired_dt,
+    COUNT(DISTINCT ep.EXECUTION_CANDIDATE_ID) AS total_expired,
+    COUNT(DISTINCT CASE WHEN al.lost_at IS NOT NULL THEN ep.EXECUTION_CANDIDATE_ID END) AS acs_lost_within_1d,
+    ROUND(100.0 * COUNT(DISTINCT CASE WHEN al.lost_at IS NOT NULL THEN ep.EXECUTION_CANDIDATE_ID END)
+        / NULLIF(COUNT(DISTINCT ep.EXECUTION_CANDIDATE_ID), 0), 2) AS pct_acs_lost,
+    COUNT(DISTINCT CASE WHEN rd.DEVICE_ID IS NOT NULL THEN ep.EXECUTION_CANDIDATE_ID END) AS has_recoverable_due,
+    ROUND(100.0 * COUNT(DISTINCT CASE WHEN rd.DEVICE_ID IS NOT NULL THEN ep.EXECUTION_CANDIDATE_ID END)
+        / NULLIF(COUNT(DISTINCT ep.EXECUTION_CANDIDATE_ID), 0), 2) AS pct_recoverable_due
+FROM expired_puts ep
+LEFT JOIN acs_lost al ON al.DEVICE_ID = ep.DEVICE_ID
+    AND ABS(DATEDIFF(day, ep.expired_at, al.lost_at)) <= 1
+LEFT JOIN PROD_DB.CSP_PAYMENT_SETTLEMENT_SERVICE_CSP_PAYMENT_SETTLEMENT_SERVICE.RECOVERABLE_DUE rd
+    ON rd.DEVICE_ID = ep.DEVICE_ID AND rd._FIVETRAN_ACTIVE
+GROUP BY 1 ORDER BY 1 DESC
+"""
+
+QUERIES["put_raw_closed_within_1h"] = r"""
+WITH migrated_customers AS (
+    SELECT account_id FROM T_WG_CUSTOMER
+    WHERE lco_account_id IN (
+        SELECT DISTINCT partner_id
+        FROM PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT WHERE _fivetran_active
+    )
+),
+recharges AS (
+    SELECT tg.account_id, trum.created_on AS recharge_time
+    FROM T_ROUTER_USER_MAPPING trum
+    JOIN T_WG_CUSTOMER tg ON tg.mobile = trum.mobile
+    WHERE trum.otp = 'DONE' AND trum.store_group_id = 0 AND trum.device_limit = 10
+        AND trum.mobile > '5999999999' AND trum.created_on >= CURRENT_DATE - 31
+),
+pickup_tickets AS (
+    SELECT exec.EXECUTION_CANDIDATE_ID, c.customer_id AS account_id,
+        exec.created_at AS ticket_created_at, exec.updated_at AS ticket_updated_at,
+        exec.state, exec.reason_code
+    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.NBREC_EXECUTION_CANDIDATES exec
+    JOIN PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS c
+        ON c.connection_id = exec.last_connection_id AND c._fivetran_active
+    JOIN migrated_customers mc ON mc.account_id = c.customer_id
+    WHERE exec._fivetran_active AND exec.created_at >= CURRENT_DATE - 31
+),
+first_recharge_after AS (
+    SELECT pt.EXECUTION_CANDIDATE_ID, pt.account_id,
+        DATE(pt.ticket_created_at + INTERVAL '330 minutes') AS ticket_dt,
+        pt.ticket_created_at, MIN(r.recharge_time) AS first_recharge_after_ticket,
+        pt.state, pt.reason_code, pt.ticket_updated_at
+    FROM pickup_tickets pt
+    JOIN recharges r ON r.account_id = pt.account_id AND r.recharge_time > pt.ticket_created_at
+    GROUP BY 1,2,3,4,6,7,8
+),
+flagged AS (
+    SELECT *,
+        CASE WHEN state = 'CANCELLED' AND reason_code = 'DEVICE_RESCUED' THEN 1 ELSE 0 END AS rescued,
+        CASE WHEN state = 'CANCELLED' AND reason_code = 'DEVICE_RESCUED'
+                  AND ticket_updated_at >= first_recharge_after_ticket
+                  AND ticket_updated_at <= DATEADD(hour, 2, first_recharge_after_ticket)
+             THEN 1 ELSE 0 END AS rescued_within_2h
+    FROM first_recharge_after
+)
+SELECT ticket_dt,
+    COUNT(*) AS total_recharged_after_ticket,
+    SUM(rescued) AS put_closed,
+    SUM(rescued_within_2h) AS closed_within_2h,
+    COUNT(*) - SUM(rescued) AS not_closed
+FROM flagged GROUP BY 1 ORDER BY 1 desc
+"""
+
+QUERIES["put_raw_sd_nbrec"] = r"""
+WITH migrated_customers AS (
+    SELECT account_id FROM T_WG_CUSTOMER
+    WHERE lco_account_id IN (
+        SELECT DISTINCT partner_id
+        FROM PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT WHERE _FIVETRAN_ACTIVE
+    )
+),
+sd_per_customer AS (
+    SELECT DATE(CONVERT_TIMEZONE('Asia/Kolkata', sc.created_at)) AS dt,
+        sc.CUSTOMER_ACCOUNT_ID,
+        MAX(CASE WHEN exec.created_at IS NOT NULL
+                 AND ABS(DATEDIFF(minute, exec.created_at, CONVERT_TIMEZONE('Asia/Kolkata', sc.created_at))) <= 60
+            THEN 1 ELSE 0 END) AS has_nbrec_within_1h
+    FROM PROD_DB.CUSTOMER_DB_CUSTOMER_PROFILE_SERVICE_AUDIT_PUBLIC.SECURITY_DEPOSIT_ORDERS sc
+    JOIN PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS c
+        ON c.customer_id = sc.CUSTOMER_ACCOUNT_ID AND c._FIVETRAN_ACTIVE
+    JOIN migrated_customers mc ON mc.account_id = sc.CUSTOMER_ACCOUNT_ID
+    LEFT JOIN PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.NBREC_EXECUTION_CANDIDATES exec
+        ON c.connection_id = exec.last_connection_id AND exec._FIVETRAN_ACTIVE
+    WHERE sc._FIVETRAN_ACTIVE
+        AND DATE(CONVERT_TIMEZONE('Asia/Kolkata', sc.created_at)) >= CURRENT_DATE - 31
+    GROUP BY 1, 2
+),
+daily_metrics AS (
+    SELECT dt, COUNT(*) AS total_sd_tickets, SUM(has_nbrec_within_1h) AS in_nbrec_within_1h
+    FROM sd_per_customer GROUP BY 1
+),
+metrics AS (
+    SELECT dt, 'Total Security Deposit Tickets' AS metric, total_sd_tickets AS val FROM daily_metrics
+    UNION ALL
+    SELECT dt, 'NBREC Created Within 1 Hour', in_nbrec_within_1h FROM daily_metrics
+)
+SELECT metric AS "Metric",
+    MAX(CASE WHEN dt = DATEADD(day,-1,CURRENT_DATE()) THEN val END) AS "T-1",
+    MAX(CASE WHEN dt = DATEADD(day,-2,CURRENT_DATE()) THEN val END) AS "T-2",
+    MAX(CASE WHEN dt = DATEADD(day,-3,CURRENT_DATE()) THEN val END) AS "T-3",
+    MAX(CASE WHEN dt = DATEADD(day,-4,CURRENT_DATE()) THEN val END) AS "T-4",
+    MAX(CASE WHEN dt = DATEADD(day,-5,CURRENT_DATE()) THEN val END) AS "T-5",
+    MAX(CASE WHEN dt = DATEADD(day,-6,CURRENT_DATE()) THEN val END) AS "T-6",
+    MAX(CASE WHEN dt = DATEADD(day,-7,CURRENT_DATE()) THEN val END) AS "T-7",
+    MAX(CASE WHEN dt = DATEADD(day,-8,CURRENT_DATE()) THEN val END) AS "T-8",
+    ROUND(AVG(val), 1) AS "Mean",
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val), 1) AS "Median",
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1) AS "P90"
+FROM metrics WHERE dt >= CURRENT_DATE - 30
+GROUP BY metric ORDER BY metric desc
+"""
+
+QUERIES["put_raw_creation_rate"] = r"""
+WITH migrated_customers AS (
+    SELECT account_id FROM T_WG_CUSTOMER
+    WHERE lco_account_id IN (
+        SELECT DISTINCT partner_id
+        FROM PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT WHERE _FIVETRAN_ACTIVE
+    )
+),
+last_trum_expiry AS (
+    SELECT tg.account_id, MAX(trum.OTP_EXPIRY_TIME) AS last_trum_expiry_time
+    FROM T_ROUTER_USER_MAPPING trum
+    JOIN T_WG_CUSTOMER tg ON tg.mobile = trum.mobile
+    WHERE trum.otp = 'DONE' AND trum.store_group_id = 0 AND trum.device_limit = 10
+        AND trum.mobile > '5999999999'
+    GROUP BY 1
+),
+last_isp_expiry AS (
+    SELECT c.customer_id AS account_id, MAX(rg.WINDOW_END) AS last_isp_expiry_time
+    FROM PROD_DB.CSP_RV_SERVICE_CSP_RV_SERVICE.RECHARGE_GATES rg
+    JOIN PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS c
+        ON c.connection_id = rg.CONNECTION_ID AND c._FIVETRAN_ACTIVE
+    WHERE rg._FIVETRAN_ACTIVE GROUP BY 1
+),
+eligible_customers AS (
+    SELECT mc.account_id,
+        DATEADD(day, 15, CASE
+            WHEN le.last_trum_expiry_time IS NULL THEN ie.last_isp_expiry_time
+            WHEN ie.last_isp_expiry_time IS NULL THEN le.last_trum_expiry_time
+            ELSE LEAST(le.last_trum_expiry_time, ie.last_isp_expiry_time)
+        END) AS system_trigger_date
+    FROM migrated_customers mc
+    LEFT JOIN last_trum_expiry le ON le.account_id = mc.account_id
+    LEFT JOIN last_isp_expiry ie ON ie.account_id = mc.account_id
+    WHERE (le.last_trum_expiry_time IS NOT NULL AND DATEADD(day,15,le.last_trum_expiry_time) <= CURRENT_DATE)
+        OR (ie.last_isp_expiry_time IS NOT NULL AND DATEADD(day,15,ie.last_isp_expiry_time) <= CURRENT_DATE)
+),
+eligible_in_window AS (
+    SELECT * FROM eligible_customers
+    WHERE DATE(system_trigger_date) BETWEEN CURRENT_DATE - 31 AND CURRENT_DATE
+),
+customer_coverage AS (
+    SELECT DATE(e.system_trigger_date) AS dt, e.account_id,
+        MAX(CASE WHEN sc.CUSTOMER_ACCOUNT_ID IS NOT NULL THEN 1 ELSE 0 END) AS has_sd,
+        MAX(CASE WHEN exec.last_connection_id IS NOT NULL THEN 1 ELSE 0 END) AS has_nbrec,
+        MAX(CASE WHEN sc.CUSTOMER_ACCOUNT_ID IS NOT NULL AND exec.last_connection_id IS NOT NULL
+                 AND ABS(DATEDIFF(minute, exec.created_at, CONVERT_TIMEZONE('Asia/Kolkata', sc.created_at))) <= 720
+            THEN 1 ELSE 0 END) AS has_both_within_12h
+    FROM eligible_in_window e
+    LEFT JOIN PROD_DB.CUSTOMER_DB_CUSTOMER_PROFILE_SERVICE_AUDIT_PUBLIC.SECURITY_DEPOSIT_ORDERS sc
+        ON sc.CUSTOMER_ACCOUNT_ID = e.account_id AND sc._FIVETRAN_ACTIVE
+    LEFT JOIN PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS c
+        ON c.customer_id = e.account_id AND c._FIVETRAN_ACTIVE
+    LEFT JOIN PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.NBREC_EXECUTION_CANDIDATES exec
+        ON exec.last_connection_id = c.connection_id AND exec._FIVETRAN_ACTIVE
+    GROUP BY 1, 2
+),
+daily_metrics AS (
+    SELECT dt, COUNT(*) AS eligible_customers, SUM(has_sd) AS has_sd_ticket,
+        SUM(has_nbrec) AS has_nbrec, SUM(has_both_within_12h) AS has_both_within_12h,
+        ROUND(SUM(has_both_within_12h) * 100.0 / NULLIF(COUNT(*),0), 1) AS pct_both_within_12h
+    FROM customer_coverage GROUP BY 1
+),
+metrics AS (
+    SELECT dt, 'Eligible Customers' AS metric, eligible_customers AS val FROM daily_metrics
+    UNION ALL SELECT dt, 'Has SD Ticket', has_sd_ticket FROM daily_metrics
+    UNION ALL SELECT dt, 'Has NBREC', has_nbrec FROM daily_metrics
+    UNION ALL SELECT dt, 'Has Both Within 1 Hours', has_both_within_12h FROM daily_metrics
+)
+SELECT metric AS "Metric",
+    MAX(CASE WHEN dt = DATEADD(day,-1,CURRENT_DATE()) THEN val END) AS "T-1",
+    MAX(CASE WHEN dt = DATEADD(day,-2,CURRENT_DATE()) THEN val END) AS "T-2",
+    MAX(CASE WHEN dt = DATEADD(day,-3,CURRENT_DATE()) THEN val END) AS "T-3",
+    MAX(CASE WHEN dt = DATEADD(day,-4,CURRENT_DATE()) THEN val END) AS "T-4",
+    MAX(CASE WHEN dt = DATEADD(day,-5,CURRENT_DATE()) THEN val END) AS "T-5",
+    MAX(CASE WHEN dt = DATEADD(day,-6,CURRENT_DATE()) THEN val END) AS "T-6",
+    MAX(CASE WHEN dt = DATEADD(day,-7,CURRENT_DATE()) THEN val END) AS "T-7",
+    MAX(CASE WHEN dt = DATEADD(day,-8,CURRENT_DATE()) THEN val END) AS "T-8",
+    ROUND(AVG(val),1) AS "Mean",
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "Median",
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "P90"
+FROM metrics WHERE dt >= CURRENT_DATE - 30
+GROUP BY metric ORDER BY metric
+"""
+
 # ── Add more workflow queries here ────────────────────────────────
 QUERIES["pickup_tickets_efficiency"] = r"""
 WITH params AS (SELECT DATE(CONVERT_TIMEZONE('UTC','Asia/Kolkata',CURRENT_TIMESTAMP())) AS today),
