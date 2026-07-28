@@ -34,10 +34,10 @@ QUERIES = {}
 QUERIES["b2i_health"] = r"""
 WITH
 bookings_base AS (
-  SELECT CONNECTION_ID, MOBILE,
+  SELECT  CONNECTION_ID, MOBILE,
     TO_DATE(BOOKING_CONFIRM_DATE) AS booking_date
   FROM PROD_DB.PUBLIC.COMPANY_B_CONNECTION_BOOKING_ENRICHED
-  WHERE TO_DATE(BOOKING_CONFIRM_DATE) BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1
+  WHERE TO_DATE(BOOKING_CONFIRM_DATE) BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE-1
 ),
 clos_reached AS (
   SELECT DISTINCT CONNECTION_ID
@@ -56,10 +56,10 @@ tas_created AS (
 ),
 daily_conn AS (
   SELECT bb.booking_date AS dt,
-    COUNT(DISTINCT bb.MOBILE)                                                                        AS total_bookings,
-    COUNT(DISTINCT CASE WHEN cr.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)                  AS clos_count,
-    COUNT(DISTINCT CASE WHEN dr.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)                  AS das_count,
-    COUNT(DISTINCT CASE WHEN tc.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)                  AS tas_count
+    COUNT( DISTINCT BB.MOBILE)                                                                 AS total_bookings,
+    COUNT(DISTINCT CASE WHEN cr.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)                 AS clos_count,
+    COUNT(DISTINCT CASE WHEN dr.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)                 AS das_count,
+    COUNT(DISTINCT CASE WHEN tc.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)                 AS tas_count
   FROM bookings_base bb
   LEFT JOIN clos_reached cr ON cr.CONNECTION_ID = bb.CONNECTION_ID
   LEFT JOIN das_reached  dr ON dr.CONNECTION_ID = bb.CONNECTION_ID
@@ -70,7 +70,7 @@ all_candidates AS (
   SELECT
     e.execution_candidate_id,
     e.connection_id,
-    TO_DATE(DATEADD(MINUTE, 330, e.created_at)) AS candidate_date,
+    bb.booking_date,
     e.p41_deadline_at,
     e.p74_deadline_at,
     e.confirmed_slot_at,
@@ -78,8 +78,8 @@ all_candidates AS (
     e.failure_reason,
     e.reason_code
   FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES e
+  INNER JOIN bookings_base bb ON bb.CONNECTION_ID = e.connection_id
   WHERE e._fivetran_active
-    AND DATEADD(MINUTE, 330, e.created_at) >= DATEADD('day', -8, CURRENT_DATE())
 ),
 ct_events AS (
   SELECT
@@ -104,7 +104,7 @@ ct_events AS (
 ),
 candidate_level AS (
   SELECT
-    ac.candidate_date,
+    ac.booking_date,
     ac.execution_candidate_id,
     ac.connection_id,
     COALESCE(ct.pn_sent,           0) AS pn_sent,
@@ -138,7 +138,7 @@ candidate_level AS (
   LEFT JOIN ct_events ct ON ac.execution_candidate_id = ct.execution_candidate_id
 ),
 daily_cand AS (
-  SELECT candidate_date AS dt,
+  SELECT booking_date AS dt,
     COUNT(*)                                                                          AS total_candidates,
     SUM(pn_sent)                                                                      AS pn_sent_count,
     SUM(pn_delivered)                                                                 AS pn_delivered_count,
@@ -153,40 +153,39 @@ daily_cand AS (
     SUM(p74_eligible)                                                                 AS p74_eligible_count,
     SUM(CASE WHEN p74_eligible=1 AND failure_reason='TIMEOUT_P74' THEN 1 ELSE 0 END) AS p74_timeout_count
   FROM candidate_level
-  WHERE candidate_date < CURRENT_DATE()
   GROUP BY 1
 )
 
 SELECT sort_ord, metric_name,
-  MAX(CASE WHEN dt = CURRENT_DATE - 1 THEN val END)                                                                         AS "T-1",
-  MAX(CASE WHEN dt = CURRENT_DATE - 2 THEN val END)                                                                         AS "T-2",
-  MAX(CASE WHEN dt = CURRENT_DATE - 3 THEN val END)                                                                         AS "T-3",
-  MAX(CASE WHEN dt = CURRENT_DATE - 4 THEN val END)                                                                         AS "T-4",
-  MAX(CASE WHEN dt = CURRENT_DATE - 5 THEN val END)                                                                         AS "T-5",
-  MAX(CASE WHEN dt = CURRENT_DATE - 6 THEN val END)                                                                         AS "T-6",
-  MAX(CASE WHEN dt = CURRENT_DATE - 7 THEN val END)                                                                         AS "T-7",
-  MAX(CASE WHEN dt = CURRENT_DATE - 8 THEN val END)                                                                         AS "T-8",
-  ROUND(AVG(CASE WHEN dt BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1 THEN val::FLOAT END), 1)                            AS "Average",
-  MEDIAN(CASE WHEN dt BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1 THEN val::FLOAT END)                                   AS "Median",
-  ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CASE WHEN dt BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1 THEN val::FLOAT END), 1) AS "P90"
+  MAX(CASE WHEN dt = CURRENT_DATE - 1 THEN val END)                                                                              AS "T-1",
+  MAX(CASE WHEN dt = CURRENT_DATE - 2 THEN val END)                                                                              AS "T-2",
+  MAX(CASE WHEN dt = CURRENT_DATE - 3 THEN val END)                                                                              AS "T-3",
+  MAX(CASE WHEN dt = CURRENT_DATE - 4 THEN val END)                                                                              AS "T-4",
+  MAX(CASE WHEN dt = CURRENT_DATE - 5 THEN val END)                                                                              AS "T-5",
+  MAX(CASE WHEN dt = CURRENT_DATE - 6 THEN val END)                                                                              AS "T-6",
+  MAX(CASE WHEN dt = CURRENT_DATE - 7 THEN val END)                                                                              AS "T-7",
+  MAX(CASE WHEN dt = CURRENT_DATE - 8 THEN val END)                                                                              AS "T-8",
+  ROUND(AVG(CASE WHEN dt BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1 THEN val::FLOAT END), 1)                                 AS "Average",
+  MEDIAN(CASE WHEN dt BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1 THEN val::FLOAT END)                                        AS "Median",
+  ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CASE WHEN dt BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1 THEN val::FLOAT END), 1) AS "P90"
 FROM (
-  SELECT  0 sort_ord, '# Bookings Confirmed'                             metric_name, dt, total_bookings        val FROM daily_conn
-  UNION ALL SELECT  1, 'H1: # Connections Created (CLOS)',                            dt, clos_count               FROM daily_conn
-  UNION ALL SELECT  2, 'H2: # Connections Reached DAS',                              dt, das_count                FROM daily_conn
-  UNION ALL SELECT  3, 'H3: # Tasks Created (TAS)',                                  dt, tas_count                FROM daily_conn
-  UNION ALL SELECT  4, '# Total Candidates',                                         dt, total_candidates         FROM daily_cand
-  UNION ALL SELECT  5, 'PN: # Sent to CSP',                                          dt, pn_sent_count            FROM daily_cand
-  UNION ALL SELECT  6, 'PN: # Delivered',                                            dt, pn_delivered_count       FROM daily_cand
-  UNION ALL SELECT  7, 'FPN: # Delivered',                                           dt, fpn_delivered_count      FROM daily_cand
-  UNION ALL SELECT  8, 'Task Attention (PN or FPN delivered)',                        dt, attention_count          FROM daily_cand
-  UNION ALL SELECT  9, 'Slot Confirm PN: # Sent',                                    dt, slot_pn_sent_count       FROM daily_cand
-  UNION ALL SELECT 10, 'Slot Confirm PN: # Delivered',                               dt, slot_pn_delivered_count  FROM daily_cand
-  UNION ALL SELECT 11, 'Tech Assigned PN: # Sent',                                   dt, tech_pn_sent_count       FROM daily_cand
-  UNION ALL SELECT 12, 'Tech Assigned PN: # Delivered',                              dt, tech_pn_delivered_count  FROM daily_cand
-  UNION ALL SELECT 13, 'P41: # Eligible (no slot proposed, deadline hit)',            dt, p41_eligible_count       FROM daily_cand
-  UNION ALL SELECT 14, 'P41: # Timeout Triggered',                                   dt, p41_timeout_count        FROM daily_cand
-  UNION ALL SELECT 15, 'P74: # Eligible (slot confirmed, 72h deadline hit)',          dt, p74_eligible_count       FROM daily_cand
-  UNION ALL SELECT 16, 'P74: # Timeout Triggered',                                   dt, p74_timeout_count        FROM daily_cand
+  SELECT  0 sort_ord, '# Bookings Confirmed'                          metric_name, dt, total_bookings        val FROM daily_conn
+  UNION ALL SELECT  1, 'H1: # Connections Created (CLOS)',                         dt, clos_count               FROM daily_conn
+  UNION ALL SELECT  2, 'H2: # Connections Reached DAS',                           dt, das_count                FROM daily_conn
+  UNION ALL SELECT  3, 'H3: # Tasks Created (TAS)',                               dt, tas_count                FROM daily_conn
+  UNION ALL SELECT  4, '# Total Candidates (all cohort)',                          dt, total_candidates         FROM daily_cand
+  UNION ALL SELECT  5, 'PN: # Sent to CSP',                                       dt, pn_sent_count            FROM daily_cand
+  UNION ALL SELECT  6, 'PN: # Delivered',                                         dt, pn_delivered_count       FROM daily_cand
+  UNION ALL SELECT  7, 'FPN: # Delivered',                                        dt, fpn_delivered_count      FROM daily_cand
+  UNION ALL SELECT  8, 'Task Attention (PN or FPN delivered)',                     dt, attention_count          FROM daily_cand
+  UNION ALL SELECT  9, 'Slot Confirm PN: # Sent',                                 dt, slot_pn_sent_count       FROM daily_cand
+  UNION ALL SELECT 10, 'Slot Confirm PN: # Delivered',                            dt, slot_pn_delivered_count  FROM daily_cand
+  UNION ALL SELECT 11, 'Tech Assigned PN: # Sent',                                dt, tech_pn_sent_count       FROM daily_cand
+  UNION ALL SELECT 12, 'Tech Assigned PN: # Delivered',                           dt, tech_pn_delivered_count  FROM daily_cand
+  UNION ALL SELECT 13, 'P41: # Eligible (no slot proposed, deadline hit)',         dt, p41_eligible_count       FROM daily_cand
+  UNION ALL SELECT 14, 'P41: # Timeout Triggered',                                dt, p41_timeout_count        FROM daily_cand
+  UNION ALL SELECT 15, 'P74: # Eligible (slot confirmed, 72h deadline hit)',       dt, p74_eligible_count       FROM daily_cand
+  UNION ALL SELECT 16, 'P74: # Timeout Triggered',                                dt, p74_timeout_count        FROM daily_cand
 ) m
 GROUP BY sort_ord, metric_name
 ORDER BY sort_ord
