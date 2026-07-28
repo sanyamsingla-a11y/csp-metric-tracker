@@ -46,7 +46,7 @@ retry_counts AS (
     WHERE NOT _fivetran_deleted
     GROUP BY withdrawal_id
 ),
-outcomes AS (
+tagged AS (
     SELECT
         wd.debit_date,
         CASE
@@ -62,17 +62,23 @@ outcomes AS (
     FROM withdrawals wd
     LEFT JOIN retry_log rl ON rl.withdrawal_id = wd.withdrawal_id
     LEFT JOIN retry_counts rc ON rc.withdrawal_id = wd.withdrawal_id
-    WHERE (rl.withdrawal_id IS NULL OR rc.final_status = 'processed')
+),
+period_totals AS (
+    SELECT p.period_name, COUNT(*) AS total
+    FROM periods p
+    JOIN tagged t ON t.debit_date BETWEEN p.start_date AND p.end_date
+    GROUP BY p.period_name
 ),
 period_stats AS (
     SELECT
         p.period_name,
-        o.metric,
-        o.sort_order,
-        ROUND(100.0 * COUNT(*) / NULLIF(SUM(COUNT(*)) OVER (PARTITION BY p.period_name), 0), 2) AS val
+        t.metric,
+        t.sort_order,
+        ROUND(100.0 * COUNT(*) / NULLIF(pt.total, 0), 2) AS val
     FROM periods p
-    JOIN outcomes o ON o.debit_date BETWEEN p.start_date AND p.end_date
-    GROUP BY p.period_name, o.metric, o.sort_order
+    JOIN tagged t ON t.debit_date BETWEEN p.start_date AND p.end_date AND t.metric IS NOT NULL
+    JOIN period_totals pt ON pt.period_name = p.period_name
+    GROUP BY p.period_name, t.metric, t.sort_order, pt.total
 )
 SELECT
     metric                                                           AS "Metric",
