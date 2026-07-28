@@ -65,7 +65,7 @@ period_stats AS (
     GROUP BY p.period_name
 )
 SELECT
-    'Overall Payment Success Rate' AS "Metric",
+    'Overall Wallet to Bank S.R' AS "Metric",
     MAX(CASE WHEN period_name = 'D-1' THEN val END) AS "D-1",
     MAX(CASE WHEN period_name = 'D-2' THEN val END) AS "D-2",
     MAX(CASE WHEN period_name = 'D-3' THEN val END) AS "D-3",
