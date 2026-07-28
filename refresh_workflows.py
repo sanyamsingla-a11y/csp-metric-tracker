@@ -4379,6 +4379,8 @@ EARNINGS_HEALTH_QUERIES = [
     ("earnings_health",               "earnings_q6_i1_sync_reliability.sql"),
     ("earnings_health",               "earnings_q7_i2_settlement_rails.sql"),
     ("earnings_health",               "earnings_q8_i4_notification.sql"),
+    ("earnings_health",               "earnings_q13_overall_payment_success.sql"),
+    ("earnings_health",               "earnings_q14_success_by_attempt.sql"),
 ]
 
 EARNINGS_SUBTABLE_QUERIES = {

@@ -176,7 +176,7 @@ period_rates as (
     select p.period_name, round(100.0*sum(e.is_good)/nullif(count(e.due_date),0),2) rate_pct
     from periods p left join all_events e on e.due_date between p.start_date and p.end_date
     group by p.period_name)
-select 'On-Time, Error-Free Transaction Rate' metric,
+select 'On-Time Accurate Compensation Rate' metric,
     max(iff(period_name='D-1',rate_pct,null)) "D-1",max(iff(period_name='D-2',rate_pct,null)) "D-2",
     max(iff(period_name='D-3',rate_pct,null)) "D-3",max(iff(period_name='W-1',rate_pct,null)) "W-1",
     max(iff(period_name='W-2',rate_pct,null)) "W-2",max(iff(period_name='W-3',rate_pct,null)) "W-3",

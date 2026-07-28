@@ -1,4 +1,4 @@
--- I2 — Settlement-Rails Success Rate
+-- First attempt: Wallet to Bank Settlement S.Rate
 -- One row per withdrawal_id (from WITHDRAWAL_DEBIT wallet entries).
 -- Check if it appears in payout_retry_log — if not, first_ok=1.
 -- Rate = first_ok / total attempts per period.
@@ -48,7 +48,7 @@ period_rates as (
     left join withdrawal_events e on e.debit_date between p.start_date and p.end_date
     group by p.period_name)
 
-select 'I2 — Settlement-Rails Success Rate' metric,
+select 'First attempt: Wallet to Bank Settlement S.Rate' metric,
     max(iff(period_name='D-1',rate_pct,null)) "D-1",max(iff(period_name='D-2',rate_pct,null)) "D-2",
     max(iff(period_name='D-3',rate_pct,null)) "D-3",max(iff(period_name='W-1',rate_pct,null)) "W-1",
     max(iff(period_name='W-2',rate_pct,null)) "W-2",max(iff(period_name='W-3',rate_pct,null)) "W-3",

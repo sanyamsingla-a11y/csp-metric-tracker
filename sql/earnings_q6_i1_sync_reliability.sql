@@ -1,4 +1,4 @@
--- I1 — Entitlement-to-Wallet Sync Reliability
+-- Compensation to Wallet Sync Rate
 -- Full outer join between entitlement_ledger_entries and wallet_ledger_entries for 5 types.
 -- is_synced = matched AND amount diff <= 100, OR legacy_ok.
 
@@ -107,7 +107,7 @@ period_rates as (
     from periods p left join all_sync_events e on e.sync_date between p.start_date and p.end_date
     group by p.period_name)
 
-select 'I1 — Entitlement-to-Wallet Sync Reliability' metric,
+select 'Compensation to Wallet Sync Rate' metric,
     max(iff(period_name='D-1',rate_pct,null)) "D-1",max(iff(period_name='D-2',rate_pct,null)) "D-2",
     max(iff(period_name='D-3',rate_pct,null)) "D-3",max(iff(period_name='W-1',rate_pct,null)) "W-1",
     max(iff(period_name='W-2',rate_pct,null)) "W-2",max(iff(period_name='W-3',rate_pct,null)) "W-3",
