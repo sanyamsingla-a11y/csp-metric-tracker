@@ -27,33 +27,36 @@ csp_account AS (
       AND csp_id NOT IN ('a0a6w1','a0a0b1')
       AND partner_id IS NOT NULL
 ),
-led AS (
-    SELECT
-        w.reference_id AS withdrawal_id,
-        MIN(DATE(CONVERT_TIMEZONE('Asia/Kolkata', w.created_at))) AS debit_date
+withdrawals AS (
+    SELECT w.reference_id AS withdrawal_id,
+           DATE(CONVERT_TIMEZONE('Asia/Kolkata', w.created_at)) AS debit_date
     FROM csp_payment_settlement_service_csp_payment_settlement_service.wallet_ledger_entries w
     JOIN csp_account c ON c.csp_id = w.csp_id
     WHERE w._fivetran_active
       AND w.entry_type = 'WITHDRAWAL_DEBIT'
-      AND w.reference_id IS NOT NULL
-    GROUP BY w.reference_id
 ),
-retry AS (
+retry_log AS (
+    SELECT DISTINCT withdrawal_id
+    FROM csp_payment_settlement_service_csp_payment_settlement_service.payout_retry_log
+    WHERE NOT _fivetran_deleted
+),
+retry_detail AS (
     SELECT withdrawal_id, retry_status
     FROM csp_payment_settlement_service_csp_payment_settlement_service.payout_retry_log
     WHERE NOT _fivetran_deleted
 ),
 outcomes AS (
     SELECT
-        l.debit_date,
+        wd.debit_date,
         CASE
-            WHEN r.withdrawal_id IS NULL              THEN 1
-            WHEN r.retry_status  = 'processed'        THEN 1
-            WHEN r.retry_status IN ('failed','reversed') THEN 0
+            WHEN rl.withdrawal_id IS NULL                        THEN 1
+            WHEN rd.retry_status  = 'processed'                 THEN 1
+            WHEN rd.retry_status IN ('failed','reversed')        THEN 0
             ELSE NULL
         END AS succeeded
-    FROM led l
-    LEFT JOIN retry r ON r.withdrawal_id = l.withdrawal_id
+    FROM withdrawals wd
+    LEFT JOIN retry_log rl ON rl.withdrawal_id = wd.withdrawal_id
+    LEFT JOIN retry_detail rd ON rd.withdrawal_id = wd.withdrawal_id
 ),
 period_stats AS (
     SELECT
