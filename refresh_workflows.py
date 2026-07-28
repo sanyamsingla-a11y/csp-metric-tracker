@@ -1568,6 +1568,7 @@ final AS (
 )
 SELECT
     metric AS "Metric",
+    MAX(CASE WHEN dt = CURRENT_DATE() THEN val END) AS "Today",
     MAX(CASE WHEN dt = DATEADD(day,-1,CURRENT_DATE()) THEN val END) AS "T-1",
     MAX(CASE WHEN dt = DATEADD(day,-2,CURRENT_DATE()) THEN val END) AS "T-2",
     MAX(CASE WHEN dt = DATEADD(day,-3,CURRENT_DATE()) THEN val END) AS "T-3",
@@ -1575,8 +1576,7 @@ SELECT
     MAX(CASE WHEN dt = DATEADD(day,-5,CURRENT_DATE()) THEN val END) AS "T-5",
     MAX(CASE WHEN dt = DATEADD(day,-6,CURRENT_DATE()) THEN val END) AS "T-6",
     MAX(CASE WHEN dt = DATEADD(day,-7,CURRENT_DATE()) THEN val END) AS "T-7",
-    MAX(CASE WHEN dt = DATEADD(day,-8,CURRENT_DATE()) THEN val END) AS "T-8",
-    ROUND(AVG(val),1) AS "Mean",
+    ROUND(AVG(val),1) AS "Average",
     ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "Median",
     ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "P90"
 FROM final
@@ -1611,6 +1611,7 @@ final AS (
 )
 SELECT
     metric AS "Metric",
+    MAX(CASE WHEN dt = CURRENT_DATE() THEN val END) AS "Today",
     MAX(CASE WHEN dt = DATEADD(day,-1,CURRENT_DATE()) THEN val END) AS "T-1",
     MAX(CASE WHEN dt = DATEADD(day,-2,CURRENT_DATE()) THEN val END) AS "T-2",
     MAX(CASE WHEN dt = DATEADD(day,-3,CURRENT_DATE()) THEN val END) AS "T-3",
@@ -1618,8 +1619,7 @@ SELECT
     MAX(CASE WHEN dt = DATEADD(day,-5,CURRENT_DATE()) THEN val END) AS "T-5",
     MAX(CASE WHEN dt = DATEADD(day,-6,CURRENT_DATE()) THEN val END) AS "T-6",
     MAX(CASE WHEN dt = DATEADD(day,-7,CURRENT_DATE()) THEN val END) AS "T-7",
-    MAX(CASE WHEN dt = DATEADD(day,-8,CURRENT_DATE()) THEN val END) AS "T-8",
-    ROUND(AVG(val),1) AS "Mean",
+    ROUND(AVG(val),1) AS "Average",
     ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "Median",
     ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "P90"
 FROM final
@@ -1659,6 +1659,7 @@ final AS (
 )
 SELECT
     metric AS "Metric",
+    MAX(CASE WHEN dt = CURRENT_DATE() THEN val END) AS "Today",
     MAX(CASE WHEN dt = DATEADD(day,-1,CURRENT_DATE()) THEN val END) AS "T-1",
     MAX(CASE WHEN dt = DATEADD(day,-2,CURRENT_DATE()) THEN val END) AS "T-2",
     MAX(CASE WHEN dt = DATEADD(day,-3,CURRENT_DATE()) THEN val END) AS "T-3",
@@ -1666,8 +1667,7 @@ SELECT
     MAX(CASE WHEN dt = DATEADD(day,-5,CURRENT_DATE()) THEN val END) AS "T-5",
     MAX(CASE WHEN dt = DATEADD(day,-6,CURRENT_DATE()) THEN val END) AS "T-6",
     MAX(CASE WHEN dt = DATEADD(day,-7,CURRENT_DATE()) THEN val END) AS "T-7",
-    MAX(CASE WHEN dt = DATEADD(day,-8,CURRENT_DATE()) THEN val END) AS "T-8",
-    ROUND(AVG(val),1) AS "Mean",
+    ROUND(AVG(val),1) AS "Average",
     ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "Median",
     ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "P90"
 FROM final
@@ -1697,6 +1697,7 @@ metrics AS (
 )
 SELECT
     metric AS "Metric",
+    MAX(CASE WHEN dt = CURRENT_DATE() THEN val END) AS "Today",
     MAX(CASE WHEN dt = DATEADD(day,-1,CURRENT_DATE()) THEN val END) AS "T-1",
     MAX(CASE WHEN dt = DATEADD(day,-2,CURRENT_DATE()) THEN val END) AS "T-2",
     MAX(CASE WHEN dt = DATEADD(day,-3,CURRENT_DATE()) THEN val END) AS "T-3",
@@ -1704,8 +1705,7 @@ SELECT
     MAX(CASE WHEN dt = DATEADD(day,-5,CURRENT_DATE()) THEN val END) AS "T-5",
     MAX(CASE WHEN dt = DATEADD(day,-6,CURRENT_DATE()) THEN val END) AS "T-6",
     MAX(CASE WHEN dt = DATEADD(day,-7,CURRENT_DATE()) THEN val END) AS "T-7",
-    MAX(CASE WHEN dt = DATEADD(day,-8,CURRENT_DATE()) THEN val END) AS "T-8",
-    ROUND(AVG(val),1) AS "Mean",
+    ROUND(AVG(val),1) AS "Average",
     ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "Median",
     ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "P90"
 FROM metrics
@@ -1747,6 +1747,7 @@ metrics AS (
 )
 SELECT
     metric AS "Metric",
+    MAX(CASE WHEN dt = CURRENT_DATE() THEN val END) AS "Today",
     MAX(CASE WHEN dt = DATEADD(day,-1,CURRENT_DATE()) THEN val END) AS "T-1",
     MAX(CASE WHEN dt = DATEADD(day,-2,CURRENT_DATE()) THEN val END) AS "T-2",
     MAX(CASE WHEN dt = DATEADD(day,-3,CURRENT_DATE()) THEN val END) AS "T-3",
@@ -1754,8 +1755,7 @@ SELECT
     MAX(CASE WHEN dt = DATEADD(day,-5,CURRENT_DATE()) THEN val END) AS "T-5",
     MAX(CASE WHEN dt = DATEADD(day,-6,CURRENT_DATE()) THEN val END) AS "T-6",
     MAX(CASE WHEN dt = DATEADD(day,-7,CURRENT_DATE()) THEN val END) AS "T-7",
-    MAX(CASE WHEN dt = DATEADD(day,-8,CURRENT_DATE()) THEN val END) AS "T-8",
-    ROUND(AVG(val),1) AS "Mean",
+    ROUND(AVG(val),1) AS "Average",
     ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "Median",
     ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "P90"
 FROM metrics
@@ -3971,6 +3971,7 @@ metrics AS (
     UNION ALL SELECT dt, 'PUT Creation Rate', ROUND(100 * present_in_nbrec_6h / NULLIF(total_tickets,0),2) FROM daily
 )
 SELECT metric AS "Metric",
+    MAX(CASE WHEN dt = CURRENT_DATE() THEN val END) AS "Today",
     MAX(CASE WHEN dt = DATEADD(day,-1,CURRENT_DATE()) THEN val END) AS "T-1",
     MAX(CASE WHEN dt = DATEADD(day,-2,CURRENT_DATE()) THEN val END) AS "T-2",
     MAX(CASE WHEN dt = DATEADD(day,-3,CURRENT_DATE()) THEN val END) AS "T-3",
@@ -3978,8 +3979,7 @@ SELECT metric AS "Metric",
     MAX(CASE WHEN dt = DATEADD(day,-5,CURRENT_DATE()) THEN val END) AS "T-5",
     MAX(CASE WHEN dt = DATEADD(day,-6,CURRENT_DATE()) THEN val END) AS "T-6",
     MAX(CASE WHEN dt = DATEADD(day,-7,CURRENT_DATE()) THEN val END) AS "T-7",
-    MAX(CASE WHEN dt = DATEADD(day,-8,CURRENT_DATE()) THEN val END) AS "T-8",
-    ROUND(AVG(val),1) AS "Mean",
+    ROUND(AVG(val),1) AS "Average",
     ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "Median",
     ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "P90"
 FROM metrics
