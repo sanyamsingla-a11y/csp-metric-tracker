@@ -1368,7 +1368,7 @@ SELECT metric,
   "Average", "Median", "P90"
 FROM (
   SELECT 1 AS sort_ord, 'Commission Claimed Ticket Open Rate' AS metric,
-    cm_d0, cm_d1, cm_d2, cm_d3, cm_d4, cm_d5, cm_d6, cm_d7, cm_avg, cm_med, cm_p90
+    cm_d0 AS "Today", cm_d1 AS "T-1", cm_d2 AS "T-2", cm_d3 AS "T-3", cm_d4 AS "T-4", cm_d5 AS "T-5", cm_d6 AS "T-6", cm_d7 AS "T-7", cm_avg AS "Average", cm_med AS "Median", cm_p90 AS "P90"
   FROM commission_agg
   UNION ALL
   SELECT 2, 'NBREC - Failed (CX Recharged after 21 days of PUT creation)',
