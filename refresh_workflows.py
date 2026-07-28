@@ -1496,13 +1496,13 @@ device_checks AS (
 ),
 q1 AS (
     SELECT order_date AS dt,
-        'Dispatched -> Pending CSP Receipt' AS metric,
+        'Ordering Match Rate (Dispatched in Device Order vs Pending CSP Receipt in Netbox Custody)' AS metric,
         SUM(CASE WHEN order_status='DISPATCHED' THEN 1 ELSE 0 END) AS total,
         SUM(dispatched_ok)                                          AS matched
     FROM device_checks GROUP BY 1
     UNION ALL
     SELECT order_date,
-        'Fulfilled -> Custodied',
+        'Completion Match Rate (Fulfilled in Device Order vs Custodied in Netbox Custody)',
         SUM(CASE WHEN order_status='FULFILLED' THEN 1 ELSE 0 END),
         SUM(fulfilled_ok)
     FROM device_checks GROUP BY 1
@@ -1523,7 +1523,7 @@ deposit_additions AS (
 ),
 q2 AS (
     SELECT COALESCE(w.dt, d.dt) AS dt,
-        'Wallet Deducted -> Deposit Added'   AS metric,
+        'Wallet to Security Match Rate (Wallet Deducted → Deposit Added)'   AS metric,
         COALESCE(w.amt_deducted, 0)         AS total,
         COALESCE(d.amt_added, 0)            AS matched
     FROM wallet_deductions w
@@ -1554,7 +1554,7 @@ matched  AS (
 ),
 q3 AS (
     SELECT COALESCE(t1_daily.dt, t2_daily.dt) AS dt,
-        'Returned to Warehouse Match Rate'     AS metric,
+        'Returned to Warehouse Match Rate(Pyropes vs Netbox Custody'     AS metric,
         COALESCE(t1_daily.t1_ct, 0)           AS total,
         COALESCE(matched.matched_ct, 0)        AS matched
     FROM t1_daily
@@ -1615,12 +1615,12 @@ device_checks AS (
 ),
 q1 AS (
     SELECT order_date AS dt,
-        'Dispatched -> Pending CSP Receipt'  AS metric,
+        'Ordering Match Rate (Dispatched in Device Order vs Pending CSP Receipt in Netbox Custody)'  AS metric,
         ROUND(100.0 * SUM(dispatched_ok) / NULLIF(SUM(CASE WHEN order_status='DISPATCHED' THEN 1 ELSE 0 END), 0), 2) AS pct
     FROM device_checks GROUP BY 1
     UNION ALL
     SELECT order_date,
-        'Fulfilled -> Custodied',
+        'Completion Match Rate (Fulfilled in Device Order vs Custodied in Netbox Custody)',
         ROUND(100.0 * SUM(fulfilled_ok) / NULLIF(SUM(CASE WHEN order_status='FULFILLED' THEN 1 ELSE 0 END), 0), 2)
     FROM device_checks GROUP BY 1
 ),
@@ -1640,7 +1640,7 @@ deposit_additions AS (
 ),
 q2 AS (
     SELECT COALESCE(w.dt, d.dt) AS dt,
-        'Wallet Deducted -> Deposit Added' AS metric,
+        'Wallet to Security Match Rate (Wallet Deducted → Deposit Added)' AS metric,
         CASE WHEN COALESCE(w.amt_deducted, 0) = 0 THEN NULL
              ELSE ROUND(COALESCE(d.amt_added, 0) / w.amt_deducted * 100, 2)
         END AS pct
@@ -1672,7 +1672,7 @@ matched  AS (
 ),
 q3 AS (
     SELECT COALESCE(t1_daily.dt, t2_daily.dt) AS dt,
-        'Returned to Warehouse Match Rate' AS metric,
+        'Returned to Warehouse Match Rate(Pyropes vs Netbox Custody' AS metric,
         ROUND(100.0 * COALESCE(matched.matched_ct, 0) / NULLIF(COALESCE(t1_daily.t1_ct, 0), 0), 2) AS pct
     FROM t1_daily
     FULL OUTER JOIN t2_daily ON t1_daily.dt = t2_daily.dt
