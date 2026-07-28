@@ -233,6 +233,7 @@ const WORKFLOWS = [
   { id: 'quality',          name: 'Quality',            health: 'quality_health',          efficiency: 'quality_efficiency' },
   { id: 'device_ordering',  name: 'Device Ordering',    health: 'device_ordering_health',  efficiency: 'device_ordering_efficiency' },
   { id: 'earnings',         name: 'Earnings',           health: 'earnings_health',         efficiency: 'earnings_efficiency',        raw: 'earnings_raw' },
+  { id: 'ivr_ops',          name: 'IVR Ops (Phase 1)',  health: 'ivr_ops_phase1',          iframe: 'https://wiom-ivr-ops-dashboard.vercel.app/phase1' },
 ];
 
 const COLS_HEALTH = ['Today','T-1','T-2','T-3','T-4','T-5','T-6','T-7','Average','Median','P90'];
@@ -286,6 +287,13 @@ function loadMetric(key, wfName, type) {
     <span class="bc-active">${type}</span>
   `;
   document.getElementById('mainTitle').textContent = wfName + ' — ' + type;
+
+  const iframeWf = WORKFLOWS.find(w => w.health === key && w.iframe);
+  if (iframeWf) {
+    document.getElementById('mainBody').innerHTML =
+      '<iframe src="' + iframeWf.iframe + '" style="width:100%;height:calc(100vh - 100px);border:none;border-radius:8px;"></iframe>';
+    return;
+  }
 
   const rows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[key] : null;
 
