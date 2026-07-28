@@ -229,7 +229,7 @@ const WORKFLOWS = [
   { id: 'b2i',              name: 'Booking to Install', health: 'b2i_health',              efficiency: 'b2i_efficiency',             raw: 'b2i_funnel' },
   { id: 'service_tickets',  name: 'Service Tickets',    health: 'service_tickets_health',  raw: 'service_tickets_raw' },
   { id: 'pickup_tickets',   name: 'Pickup Tickets',     health: 'pickup_tickets_health',   efficiency: 'pickup_tickets_efficiency',  raw: 'pickup_tickets_raw' },
-  { id: 'isp_recharge',     name: 'ISP Recharge',       health: 'isp_recharge_health',     efficiency: 'isp_recharge_efficiency' },
+  { id: 'isp_recharge',     name: 'ISP Recharge',       health: 'isp_recharge_health',     efficiency: 'isp_recharge_efficiency',  raw: 'isp_recharge_raw' },
   { id: 'quality',          name: 'Quality',            health: 'quality_health',          efficiency: 'quality_efficiency' },
   { id: 'device_ordering',  name: 'Device Ordering',    health: 'device_ordering_health',  efficiency: 'device_ordering_efficiency' },
   { id: 'earnings',         name: 'Earnings',           health: 'earnings_health',         efficiency: 'earnings_efficiency',        raw: 'earnings_raw' },
@@ -297,7 +297,7 @@ function loadMetric(key, wfName, type) {
 
   const rows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[key] : null;
 
-  const hasSubtables = key === 'isp_recharge_efficiency' || key === 'service_tickets_raw' || key === 'pickup_tickets_raw';
+  const hasSubtables = key === 'isp_recharge_raw' || key === 'service_tickets_raw' || key === 'pickup_tickets_raw';
   if ((!rows || rows.length === 0) && !hasSubtables) {
     document.getElementById('mainBody').innerHTML =
       '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
@@ -381,17 +381,36 @@ function loadMetric(key, wfName, type) {
     }
   }
 
-  if (key === 'isp_recharge_efficiency') {
-    const oblRes = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['isp_recharge_obligations_resolved'] : null;
-    if (oblRes && oblRes.length > 0) {
-      html = '<div class="section-label">Recharge Obligations Resolved (daily by reason)</div>' +
-             buildDailyTableHtml(oblRes) + html;
-    }
-    const rdni = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['isp_recharge_rdni'] : null;
-    if (rdni && rdni.length > 0) {
-      html += '<div class="section-label">RDNI within 3 Days of Recharge Resolution</div>';
-      html += buildDailyTableHtml(rdni);
-    }
+  if (key === 'isp_recharge_raw') {
+    const ISP_RAW_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'];
+    const ispRawSections = [
+      { key: 'isp_raw_obligations_resolved', title: '1. Resolution TAT by Reason' },
+      { key: 'isp_raw_rdni', title: '2. RDNI Within 3 Days of Recharge' },
+    ];
+    ispRawSections.forEach((sec, i) => {
+      const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[sec.key] : null;
+      if (d && d.length > 0) {
+        const mt = i === 0 ? '' : ' style="margin-top:36px"';
+        html += '<div class="section-label"' + mt + '>' + sec.title + '</div>';
+        html += buildTableHtml(d, ISP_RAW_COLS, false);
+      }
+    });
+  }
+
+  if (key === 'isp_recharge_health') {
+    const ISP_HEALTH_SUB_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'];
+    const ispHealthSections = [
+      { key: 'isp_health_ticket_creation_rate', title: 'ISP Ticket Creation Rate' },
+      { key: 'isp_health_pn_sent', title: 'ISP Ticket-to-CSP Visibility Rate - PN Sent' },
+      { key: 'isp_health_pn_delivered', title: 'ISP Ticket-to-CSP Visibility Rate - PN Delivered' },
+    ];
+    ispHealthSections.forEach((sec) => {
+      const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[sec.key] : null;
+      if (d && d.length > 0) {
+        html += '<div class="section-label" style="margin-top:36px">' + sec.title + '</div>';
+        html += buildTableHtml(d, ISP_HEALTH_SUB_COLS, true);
+      }
+    });
   }
 
   if (key === 'device_ordering_health') {
