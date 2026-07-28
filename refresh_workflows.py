@@ -91,13 +91,13 @@ ct_events AS (
     MAX(CASE WHEN ed.event_name = 'install_customer_slot_confirmed'                                    THEN 1 ELSE 0 END) AS slot_pn_sent,
     MAX(CASE WHEN ed.event_name = 'pn_delivered'
               AND TRY_PARSE_JSON(ed.properties):pn_type::STRING = 'ES_INSTALL_CUSTOMER_SLOT_CONFIRMED' THEN 1 ELSE 0 END) AS slot_pn_delivered,
-    MAX(CASE WHEN ed.event_name = 'technician_assigned'                                                THEN 1 ELSE 0 END) AS tech_pn_sent,
+    MAX(CASE WHEN ed.event_name = 'install_task_assigned'                                                THEN 1 ELSE 0 END) AS tech_pn_sent,
     MAX(CASE WHEN ed.event_name = 'pn_delivered'
               AND TRY_PARSE_JSON(ed.properties):pn_type::STRING = 'ES_INSTALL_TECHNICIAN_ASSIGNED'     THEN 1 ELSE 0 END) AS tech_pn_delivered
   FROM PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA ed
   WHERE ed.event_name IN (
       'install_task_created', 'pn_delivered', 'fpn_delivered',
-      'install_customer_slot_confirmed', 'technician_assigned'
+      'install_customer_slot_confirmed', 'install_task_assigned'
     )
     AND TRY_PARSE_JSON(ed.properties):execution_id::STRING IN (SELECT execution_candidate_id FROM all_candidates)
   GROUP BY 1
@@ -287,14 +287,14 @@ ct_events AS (
     MAX(CASE WHEN ed.event_name = 'install_customer_slot_confirmed'                                    THEN 1 ELSE 0 END) AS slot_pn_sent,
     MAX(CASE WHEN ed.event_name = 'pn_delivered'
               AND TRY_PARSE_JSON(ed.properties):pn_type::STRING = 'ES_INSTALL_CUSTOMER_SLOT_CONFIRMED' THEN 1 ELSE 0 END) AS slot_pn_delivered,
-    MAX(CASE WHEN ed.event_name = 'technician_assigned'                                                THEN 1 ELSE 0 END) AS tech_pn_sent,
+    MAX(CASE WHEN ed.event_name = 'install_task_assigned'                                                THEN 1 ELSE 0 END) AS tech_pn_sent,
     MAX(CASE WHEN ed.event_name = 'pn_delivered'
               AND TRY_PARSE_JSON(ed.properties):pn_type::STRING = 'ES_INSTALL_TECHNICIAN_ASSIGNED'     THEN 1 ELSE 0 END) AS tech_pn_delivered
   FROM PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA ed
   WHERE ed.event_name IN (
       'install_task_created', 'pn_delivered', 'pn_clicked', 'fpn_delivered', 'fpn_action_taken',
       'install_candidate_opened',
-      'install_customer_slot_confirmed', 'technician_assigned'
+      'install_customer_slot_confirmed', 'install_task_assigned'
     )
     AND TRY_PARSE_JSON(ed.properties):execution_id::STRING IN (SELECT execution_candidate_id FROM all_candidates)
   GROUP BY 1
