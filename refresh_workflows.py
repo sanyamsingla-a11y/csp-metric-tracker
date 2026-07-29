@@ -1776,8 +1776,9 @@ WITH recharges AS (
 ),
 payouts AS (
     SELECT
-        DATE(c.created_at) AS dt,
-        COUNT(DISTINCT a.EXECUTION_CANDIDATE_ID) AS paid_out
+        DATE(c.created_at)                         AS dt,
+        COUNT(DISTINCT a.EXECUTION_CANDIDATE_ID)   AS paid_out,
+        ROUND(SUM(c.amount) / 100.0, 2)            AS paid_amount_inr
     FROM CSP_COMPENSATION_SERVICE_CSP_COMPENSATION_SERVICE.ENTITLEMENT_LEDGER_ENTRIES b
     LEFT JOIN PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RECHARGE_EXECUTION_CANDIDATES a
         ON a.EXECUTION_CANDIDATE_ID = b.RECHARGE_EVENT_REF AND a._fivetran_active
@@ -1793,16 +1794,19 @@ daily AS (
         r.dt,
         r.total_recharges                                              AS total_val,
         p.paid_out                                                     AS paid_val,
+        p.paid_amount_inr                                              AS amount_val,
         ROUND(100.0 * p.paid_out / NULLIF(r.total_recharges, 0), 1)   AS rate_val
     FROM recharges r
     LEFT JOIN payouts p ON p.dt = r.dt
 ),
 pivoted AS (
-    SELECT '1. Total Recharges'  AS metric, dt, total_val AS val FROM daily
+    SELECT '1. Total Recharges'   AS metric, dt, total_val  AS val FROM daily
     UNION ALL
-    SELECT '2. CSPs Paid Out',              dt, paid_val        FROM daily
+    SELECT '2. CSPs Paid Out',               dt, paid_val        FROM daily
     UNION ALL
-    SELECT '3. Payout Rate (%)',            dt, rate_val        FROM daily
+    SELECT '3. Paid Amount (INR)',            dt, amount_val      FROM daily
+    UNION ALL
+    SELECT '4. Payout Rate (%)',              dt, rate_val        FROM daily
 )
 SELECT
     metric AS "Metric",
