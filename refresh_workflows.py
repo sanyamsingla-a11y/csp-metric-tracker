@@ -1764,6 +1764,111 @@ GROUP BY metric
 ORDER BY metric desc
 """
 
+QUERIES["isp_raw_payout"] = r"""
+WITH recharges AS (
+    SELECT
+        DATE(UPDATED_AT) AS dt,
+        COUNT(DISTINCT EXECUTION_CANDIDATE_ID) AS total_recharges
+    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RECHARGE_EXECUTION_CANDIDATES
+    WHERE commission_status = 'DISBURSED'
+      AND DATE(UPDATED_AT) >= CURRENT_DATE() - 31
+    GROUP BY 1
+),
+payouts AS (
+    SELECT
+        DATE(c.created_at) AS dt,
+        COUNT(DISTINCT a.EXECUTION_CANDIDATE_ID) AS paid_out
+    FROM CSP_COMPENSATION_SERVICE_CSP_COMPENSATION_SERVICE.ENTITLEMENT_LEDGER_ENTRIES b
+    LEFT JOIN PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RECHARGE_EXECUTION_CANDIDATES a
+        ON a.EXECUTION_CANDIDATE_ID = b.RECHARGE_EVENT_REF AND a._fivetran_active
+    LEFT JOIN PROD_DB.CSP_PAYMENT_SETTLEMENT_SERVICE_CSP_PAYMENT_SETTLEMENT_SERVICE.WALLET_LEDGER_ENTRIES c
+        ON c.reference_id = b.recharge_event_ref
+    WHERE DATE(c.created_at) >= CURRENT_DATE() - 31
+      AND c.entry_type = 'BASE_PAYOUT'
+      AND c.reference_id NOT ILIKE '%INSTALL%'
+    GROUP BY 1
+),
+daily AS (
+    SELECT
+        r.dt,
+        r.total_recharges                                              AS total_val,
+        p.paid_out                                                     AS paid_val,
+        ROUND(100.0 * p.paid_out / NULLIF(r.total_recharges, 0), 1)   AS rate_val
+    FROM recharges r
+    LEFT JOIN payouts p ON p.dt = r.dt
+),
+pivoted AS (
+    SELECT '1. Total Recharges'  AS metric, dt, total_val AS val FROM daily
+    UNION ALL
+    SELECT '2. CSPs Paid Out',              dt, paid_val        FROM daily
+    UNION ALL
+    SELECT '3. Payout Rate (%)',            dt, rate_val        FROM daily
+)
+SELECT
+    metric AS "Metric",
+    MAX(CASE WHEN dt = DATEADD(day,-1,CURRENT_DATE()) THEN val END) AS "T-1",
+    MAX(CASE WHEN dt = DATEADD(day,-2,CURRENT_DATE()) THEN val END) AS "T-2",
+    MAX(CASE WHEN dt = DATEADD(day,-3,CURRENT_DATE()) THEN val END) AS "T-3",
+    MAX(CASE WHEN dt = DATEADD(day,-4,CURRENT_DATE()) THEN val END) AS "T-4",
+    MAX(CASE WHEN dt = DATEADD(day,-5,CURRENT_DATE()) THEN val END) AS "T-5",
+    MAX(CASE WHEN dt = DATEADD(day,-6,CURRENT_DATE()) THEN val END) AS "T-6",
+    MAX(CASE WHEN dt = DATEADD(day,-7,CURRENT_DATE()) THEN val END) AS "T-7",
+    MAX(CASE WHEN dt = DATEADD(day,-8,CURRENT_DATE()) THEN val END) AS "T-8",
+    ROUND(AVG(val),1)                                                   AS "Mean",
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1)           AS "Median",
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1)           AS "P90"
+FROM pivoted
+GROUP BY metric
+ORDER BY metric
+"""
+
+QUERIES["isp_health_payout_rate"] = r"""
+WITH recharges AS (
+    SELECT
+        DATE(UPDATED_AT) AS dt,
+        COUNT(DISTINCT EXECUTION_CANDIDATE_ID) AS total_recharges
+    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RECHARGE_EXECUTION_CANDIDATES
+    WHERE commission_status = 'DISBURSED'
+      AND DATE(UPDATED_AT) >= CURRENT_DATE() - 15
+    GROUP BY 1
+),
+payouts AS (
+    SELECT
+        DATE(c.created_at) AS dt,
+        COUNT(DISTINCT a.EXECUTION_CANDIDATE_ID) AS paid_out
+    FROM CSP_COMPENSATION_SERVICE_CSP_COMPENSATION_SERVICE.ENTITLEMENT_LEDGER_ENTRIES b
+    LEFT JOIN PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RECHARGE_EXECUTION_CANDIDATES a
+        ON a.EXECUTION_CANDIDATE_ID = b.RECHARGE_EVENT_REF AND a._fivetran_active
+    LEFT JOIN PROD_DB.CSP_PAYMENT_SETTLEMENT_SERVICE_CSP_PAYMENT_SETTLEMENT_SERVICE.WALLET_LEDGER_ENTRIES c
+        ON c.reference_id = b.recharge_event_ref
+    WHERE DATE(c.created_at) >= CURRENT_DATE() - 15
+      AND c.entry_type = 'BASE_PAYOUT'
+      AND c.reference_id NOT ILIKE '%INSTALL%'
+    GROUP BY 1
+),
+daily AS (
+    SELECT
+        r.dt,
+        ROUND(100.0 * p.paid_out / NULLIF(r.total_recharges, 0), 1) AS val
+    FROM recharges r
+    LEFT JOIN payouts p ON p.dt = r.dt
+)
+SELECT
+    'Payout Rate' AS "Metric",
+    MAX(CASE WHEN dt = CURRENT_DATE() THEN val END) AS "Today",
+    MAX(CASE WHEN dt = DATEADD(day,-1,CURRENT_DATE()) THEN val END) AS "T-1",
+    MAX(CASE WHEN dt = DATEADD(day,-2,CURRENT_DATE()) THEN val END) AS "T-2",
+    MAX(CASE WHEN dt = DATEADD(day,-3,CURRENT_DATE()) THEN val END) AS "T-3",
+    MAX(CASE WHEN dt = DATEADD(day,-4,CURRENT_DATE()) THEN val END) AS "T-4",
+    MAX(CASE WHEN dt = DATEADD(day,-5,CURRENT_DATE()) THEN val END) AS "T-5",
+    MAX(CASE WHEN dt = DATEADD(day,-6,CURRENT_DATE()) THEN val END) AS "T-6",
+    MAX(CASE WHEN dt = DATEADD(day,-7,CURRENT_DATE()) THEN val END) AS "T-7",
+    ROUND(AVG(val),1) AS "Average",
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "Median",
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "P90"
+FROM daily
+"""
+
 QUERIES["isp_recharge_efficiency"] = r"""
 WITH params AS (
   SELECT DATE(CONVERT_TIMEZONE('UTC','Asia/Kolkata',CURRENT_TIMESTAMP())) AS today
