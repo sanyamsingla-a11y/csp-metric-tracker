@@ -57,9 +57,9 @@ tas_created AS (
 daily_conn AS (
   SELECT bb.booking_date AS dt,
     COUNT( DISTINCT BB.MOBILE)                                                                 AS total_bookings,
-    COUNT(DISTINCT CASE WHEN cr.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)                 AS clos_count,
-    COUNT(DISTINCT CASE WHEN dr.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)                 AS das_count,
-    COUNT(DISTINCT CASE WHEN tc.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)                 AS tas_count
+    COUNT(DISTINCT CASE WHEN cr.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)           AS clos_count,
+    COUNT(DISTINCT CASE WHEN dr.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)           AS das_count,
+    COUNT(DISTINCT CASE WHEN tc.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)           AS tas_count
   FROM bookings_base bb
   LEFT JOIN clos_reached cr ON cr.CONNECTION_ID = bb.CONNECTION_ID
   LEFT JOIN das_reached  dr ON dr.CONNECTION_ID = bb.CONNECTION_ID
@@ -76,7 +76,9 @@ all_candidates AS (
     e.confirmed_slot_at,
     e.current_state,
     e.failure_reason,
-    e.reason_code
+    e.reason_code,
+    e.executor_id,
+    e.is_self_assigned
   FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES e
   INNER JOIN bookings_base bb ON bb.CONNECTION_ID = e.connection_id
   WHERE e._fivetran_active
@@ -91,7 +93,7 @@ ct_events AS (
     MAX(CASE WHEN ed.event_name = 'install_customer_slot_confirmed'                                    THEN 1 ELSE 0 END) AS slot_pn_sent,
     MAX(CASE WHEN ed.event_name = 'pn_delivered'
               AND TRY_PARSE_JSON(ed.properties):pn_type::STRING = 'ES_INSTALL_CUSTOMER_SLOT_CONFIRMED' THEN 1 ELSE 0 END) AS slot_pn_delivered,
-    MAX(CASE WHEN ed.event_name = 'install_task_assigned'                                                THEN 1 ELSE 0 END) AS tech_pn_sent,
+    COUNT(CASE WHEN ed.event_name = 'install_task_assigned'                                            THEN 1 END)        AS tech_pn_sent,
     MAX(CASE WHEN ed.event_name = 'pn_delivered'
               AND TRY_PARSE_JSON(ed.properties):pn_type::STRING = 'ES_INSTALL_TECHNICIAN_ASSIGNED'     THEN 1 ELSE 0 END) AS tech_pn_delivered
   FROM PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA ed
@@ -102,6 +104,63 @@ ct_events AS (
     AND TRY_PARSE_JSON(ed.properties):execution_id::STRING IN (SELECT execution_candidate_id FROM all_candidates)
   GROUP BY 1
 ),
+cand_csp AS (
+  SELECT DISTINCT
+    ac.execution_candidate_id,
+    ca.MOBILE_NUMBER AS csp_mobile
+  FROM all_candidates ac
+  JOIN PROD_DB.CSP_DEMAND_ALLOCATION_SERVICE_CSP_DEMAND_ALLOCATION_SERVICE.CONNECTION_ALLOCATIONS a
+    ON a.CONNECTION_ID = ac.connection_id
+    AND a.ALLOCATION_STATE IN ('ASSIGNED','ACCEPTED','ACTIVE','RELEASED')
+  JOIN PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT ca
+    ON ca.csp_id = a.CSP_ID
+),
+cand_creation AS (
+  SELECT execution_candidate_id,
+    MIN(_FIVETRAN_START) AS cand_created_at
+  FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES
+  WHERE execution_candidate_id IN (SELECT execution_candidate_id FROM all_candidates)
+  GROUP BY 1
+),
+cand_window AS (
+  SELECT
+    cc.execution_candidate_id,
+    cc.csp_mobile,
+    cr.cand_created_at,
+    LEAD(cr.cand_created_at) OVER (
+      PARTITION BY cc.csp_mobile ORDER BY cr.cand_created_at
+    ) AS next_cand_at
+  FROM cand_csp cc
+  JOIN cand_creation cr ON cc.execution_candidate_id = cr.execution_candidate_id
+),
+wa_raw AS (
+  SELECT
+    event_type,
+    timestamp        AS wa_ts,
+    RIGHT(DEST_ADDR, 10) AS csp_mobile_10
+  FROM GUPSHUP_EVENTS
+  WHERE HSM_TEMPLATE_ID = '8759388'
+    AND event_type IN ('SENT', 'DELIVERED')
+    AND DATE(timestamp) >= CURRENT_DATE - 8
+),
+wa_attributed AS (
+  SELECT
+    cw.execution_candidate_id,
+    wr.event_type
+  FROM wa_raw wr
+  JOIN cand_window cw
+    ON RIGHT(cw.csp_mobile, 10) = wr.csp_mobile_10
+    AND wr.wa_ts >= cw.cand_created_at
+    AND (cw.next_cand_at IS NULL OR wr.wa_ts < cw.next_cand_at)
+),
+wa_cand AS (
+  SELECT
+    execution_candidate_id,
+    MAX(CASE WHEN event_type = 'SENT'      THEN 1 ELSE 0 END) AS wa_sent,
+    MAX(CASE WHEN event_type = 'DELIVERED' THEN 1 ELSE 0 END) AS wa_delivered
+  FROM wa_attributed
+  GROUP BY 1
+),
 candidate_level AS (
   SELECT
     ac.booking_date,
@@ -110,12 +169,17 @@ candidate_level AS (
     COALESCE(ct.pn_sent,           0) AS pn_sent,
     COALESCE(ct.pn_delivered,      0) AS pn_delivered,
     COALESCE(ct.fpn_delivered,     0) AS fpn_delivered,
+    COALESCE(wc.wa_sent,           0) AS wa_sent,
+    COALESCE(wc.wa_delivered,      0) AS wa_delivered,
     COALESCE(ct.slot_pn_sent,      0) AS slot_pn_sent,
     COALESCE(ct.slot_pn_delivered, 0) AS slot_pn_delivered,
     COALESCE(ct.tech_pn_sent,      0) AS tech_pn_sent,
     COALESCE(ct.tech_pn_delivered, 0) AS tech_pn_delivered,
-    CASE WHEN COALESCE(ct.pn_delivered,0)=1 OR COALESCE(ct.fpn_delivered,0)=1
+    CASE WHEN COALESCE(ct.pn_delivered,0)=1 OR COALESCE(ct.fpn_delivered,0)=1 OR COALESCE(wc.wa_delivered,0)=1
          THEN 1 ELSE 0 END            AS attention_delivered,
+    CASE WHEN ac.executor_id IS NOT NULL        THEN 1 ELSE 0 END AS tech_assigned,
+    CASE WHEN ac.executor_id IS NOT NULL AND COALESCE(ac.is_self_assigned, TRUE) = FALSE
+         THEN 1 ELSE 0 END            AS tech_assigned_not_self,
     CASE WHEN ac.p41_deadline_at IS NOT NULL
           AND ac.p41_deadline_at < CURRENT_TIMESTAMP
           AND ac.confirmed_slot_at IS NULL
@@ -136,6 +200,7 @@ candidate_level AS (
     ac.failure_reason
   FROM all_candidates ac
   LEFT JOIN ct_events ct ON ac.execution_candidate_id = ct.execution_candidate_id
+  LEFT JOIN wa_cand   wc ON ac.execution_candidate_id = wc.execution_candidate_id
 ),
 daily_cand AS (
   SELECT booking_date AS dt,
@@ -143,9 +208,13 @@ daily_cand AS (
     SUM(pn_sent)                                                                      AS pn_sent_count,
     SUM(pn_delivered)                                                                 AS pn_delivered_count,
     SUM(fpn_delivered)                                                                AS fpn_delivered_count,
+    SUM(wa_sent)                                                                      AS wa_sent_count,
+    SUM(wa_delivered)                                                                 AS wa_delivered_count,
     SUM(attention_delivered)                                                          AS attention_count,
     SUM(slot_pn_sent)                                                                 AS slot_pn_sent_count,
     SUM(slot_pn_delivered)                                                            AS slot_pn_delivered_count,
+    SUM(tech_assigned)                                                                AS tech_assigned_count,
+    SUM(tech_assigned_not_self)                                                       AS tech_assigned_not_self_count,
     SUM(tech_pn_sent)                                                                 AS tech_pn_sent_count,
     SUM(tech_pn_delivered)                                                            AS tech_pn_delivered_count,
     SUM(p41_eligible)                                                                 AS p41_eligible_count,
@@ -157,36 +226,40 @@ daily_cand AS (
 )
 
 SELECT sort_ord, metric_name,
-  MAX(CASE WHEN dt = CURRENT_DATE - 1 THEN val END)                                                                              AS "T-1",
-  MAX(CASE WHEN dt = CURRENT_DATE - 2 THEN val END)                                                                              AS "T-2",
-  MAX(CASE WHEN dt = CURRENT_DATE - 3 THEN val END)                                                                              AS "T-3",
-  MAX(CASE WHEN dt = CURRENT_DATE - 4 THEN val END)                                                                              AS "T-4",
-  MAX(CASE WHEN dt = CURRENT_DATE - 5 THEN val END)                                                                              AS "T-5",
-  MAX(CASE WHEN dt = CURRENT_DATE - 6 THEN val END)                                                                              AS "T-6",
-  MAX(CASE WHEN dt = CURRENT_DATE - 7 THEN val END)                                                                              AS "T-7",
-  MAX(CASE WHEN dt = CURRENT_DATE - 8 THEN val END)                                                                              AS "T-8",
-  ROUND(AVG(CASE WHEN dt BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1 THEN val::FLOAT END), 1)                                 AS "Average",
-  MEDIAN(CASE WHEN dt BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1 THEN val::FLOAT END)                                        AS "Median",
+  MAX(CASE WHEN dt = CURRENT_DATE - 1 THEN val END)                                                                                   AS "T-1",
+  MAX(CASE WHEN dt = CURRENT_DATE - 2 THEN val END)                                                                                   AS "T-2",
+  MAX(CASE WHEN dt = CURRENT_DATE - 3 THEN val END)                                                                                   AS "T-3",
+  MAX(CASE WHEN dt = CURRENT_DATE - 4 THEN val END)                                                                                   AS "T-4",
+  MAX(CASE WHEN dt = CURRENT_DATE - 5 THEN val END)                                                                                   AS "T-5",
+  MAX(CASE WHEN dt = CURRENT_DATE - 6 THEN val END)                                                                                   AS "T-6",
+  MAX(CASE WHEN dt = CURRENT_DATE - 7 THEN val END)                                                                                   AS "T-7",
+  MAX(CASE WHEN dt = CURRENT_DATE - 8 THEN val END)                                                                                   AS "T-8",
+  ROUND(AVG(CASE WHEN dt BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1 THEN val::FLOAT END), 1)                                      AS "Mean",
+  MEDIAN(CASE WHEN dt BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1 THEN val::FLOAT END)                                             AS "Median",
   ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CASE WHEN dt BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1 THEN val::FLOAT END), 1) AS "P90"
 FROM (
-  SELECT  0 sort_ord, '# Bookings Confirmed'                          metric_name, dt, total_bookings        val FROM daily_conn
-  UNION ALL SELECT  1, 'H1: # Connections Created (CLOS)',                         dt, clos_count               FROM daily_conn
-  UNION ALL SELECT  2, 'H2: # Connections Reached DAS',                           dt, das_count                FROM daily_conn
-  UNION ALL SELECT  3, 'H3: # Tasks Created (TAS)',                               dt, tas_count                FROM daily_conn
-  UNION ALL SELECT  4, '# Total Candidates (all cohort)',                          dt, total_candidates         FROM daily_cand
-  UNION ALL SELECT  5, 'PN: # Sent to CSP',                                       dt, pn_sent_count            FROM daily_cand
-  UNION ALL SELECT  6, 'PN: # Delivered',                                         dt, pn_delivered_count       FROM daily_cand
-  UNION ALL SELECT  7, 'FPN: # Delivered',                                        dt, fpn_delivered_count      FROM daily_cand
-  UNION ALL SELECT  8, 'Task Attention (PN or FPN delivered)',                     dt, attention_count          FROM daily_cand
-  UNION ALL SELECT  9, 'Slot Confirm PN: # Sent',                                 dt, slot_pn_sent_count       FROM daily_cand
-  UNION ALL SELECT 10, 'Slot Confirm PN: # Delivered',                            dt, slot_pn_delivered_count  FROM daily_cand
-  UNION ALL SELECT 11, 'Tech Assigned PN: # Sent',                                dt, tech_pn_sent_count       FROM daily_cand
-  UNION ALL SELECT 12, 'Tech Assigned PN: # Delivered',                           dt, tech_pn_delivered_count  FROM daily_cand
-  UNION ALL SELECT 13, 'P41: # Eligible (no slot proposed, deadline hit)',         dt, p41_eligible_count       FROM daily_cand
-  UNION ALL SELECT 14, 'P41: # Timeout Triggered',                                dt, p41_timeout_count        FROM daily_cand
-  UNION ALL SELECT 15, 'P74: # Eligible (slot confirmed, 72h deadline hit)',       dt, p74_eligible_count       FROM daily_cand
-  UNION ALL SELECT 16, 'P74: # Timeout Triggered',                                dt, p74_timeout_count        FROM daily_cand
-) m
+  SELECT  0, '# Bookings Confirmed',                                        dt, total_bookings                   FROM daily_conn
+  UNION ALL SELECT  1, 'H1: # Connections Created (CLOS)',                  dt, clos_count                       FROM daily_conn
+  UNION ALL SELECT  2, 'H2: # Connections Reached DAS',                     dt, das_count                        FROM daily_conn
+  UNION ALL SELECT  3, 'H3: # Tasks Created (TAS)',                         dt, tas_count                        FROM daily_conn
+  UNION ALL SELECT  4, '# Total Candidates (all cohort)',                   dt, total_candidates                 FROM daily_cand
+  UNION ALL SELECT  5, 'PN: # Sent to CSP',                                 dt, pn_sent_count                    FROM daily_cand
+  UNION ALL SELECT  6, 'PN: # Delivered',                                   dt, pn_delivered_count               FROM daily_cand
+  UNION ALL SELECT  7, 'FPN: # Delivered',                                  dt, fpn_delivered_count              FROM daily_cand
+  UNION ALL SELECT  8, 'WA: # Sent',                                        dt, wa_sent_count                    FROM daily_cand
+  UNION ALL SELECT  9, 'WA: # Delivered',                                   dt, wa_delivered_count               FROM daily_cand
+  UNION ALL SELECT 10, 'Task Attention (PN, FPN, or WA delivered)',          dt, attention_count                  FROM daily_cand
+--   UNION ALL SELECT 11, 'Slot Confirm PN: # Sent',                           dt, slot_pn_sent_count               FROM daily_cand
+--   UNION ALL SELECT 12, 'Slot Confirm PN: # Delivered',                      dt, slot_pn_delivered_count          FROM daily_cand
+  UNION ALL SELECT 13, 'Technician Assigned',                               dt, tech_assigned_count              FROM daily_cand
+  UNION ALL SELECT 14, 'Technician Assigned (not self)',                    dt, tech_assigned_not_self_count     FROM daily_cand
+  UNION ALL SELECT 15, 'Tech Assigned PN: # Sent',                          dt, tech_pn_sent_count               FROM daily_cand
+  UNION ALL SELECT 16, 'Tech Assigned PN: # Delivered',                     dt, tech_pn_delivered_count          FROM daily_cand
+  UNION ALL SELECT 17, 'P41: # Eligible (no slot proposed, deadline hit)',   dt, p41_eligible_count               FROM daily_cand
+  UNION ALL SELECT 18, 'P41: # Timeout Triggered',                          dt, p41_timeout_count                FROM daily_cand
+  UNION ALL SELECT 19, 'P74: # Eligible (slot confirmed, 72h deadline hit)', dt, p74_eligible_count               FROM daily_cand
+  UNION ALL SELECT 20, 'P74: # Timeout Triggered',                          dt, p74_timeout_count                FROM daily_cand
+) m (sort_ord, metric_name, dt, val)
 GROUP BY sort_ord, metric_name
 ORDER BY sort_ord
 LIMIT 10000
@@ -245,7 +318,8 @@ all_candidates AS (
     e.otp_verified,
     e.customer_rating,
     e.failure_reason,
-    e.reason_code
+    e.reason_code,
+    e.is_self_assigned
   FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES e
   INNER JOIN bookings_base bb ON bb.CONNECTION_ID = e.connection_id
   WHERE e._fivetran_active
@@ -286,7 +360,8 @@ ct_events AS (
     MAX(CASE WHEN ed.event_name = 'install_customer_slot_confirmed'                                    THEN 1 ELSE 0 END) AS slot_pn_sent,
     MAX(CASE WHEN ed.event_name = 'pn_delivered'
               AND TRY_PARSE_JSON(ed.properties):pn_type::STRING = 'ES_INSTALL_CUSTOMER_SLOT_CONFIRMED' THEN 1 ELSE 0 END) AS slot_pn_delivered,
-    MAX(CASE WHEN ed.event_name = 'install_task_assigned'                                                THEN 1 ELSE 0 END) AS tech_pn_sent,
+    -- Change 5: COUNT instead of MAX so 3 PNs to 3 technicians = 3, not 1
+    COUNT(CASE WHEN ed.event_name = 'install_task_assigned'                                            THEN 1 END)        AS tech_pn_sent,
     MAX(CASE WHEN ed.event_name = 'pn_delivered'
               AND TRY_PARSE_JSON(ed.properties):pn_type::STRING = 'ES_INSTALL_TECHNICIAN_ASSIGNED'     THEN 1 ELSE 0 END) AS tech_pn_delivered
   FROM PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA ed
@@ -296,6 +371,67 @@ ct_events AS (
       'install_customer_slot_confirmed', 'install_task_assigned'
     )
     AND TRY_PARSE_JSON(ed.properties):execution_id::STRING IN (SELECT execution_candidate_id FROM all_candidates)
+  GROUP BY 1
+),
+-- Change 2: WhatsApp attribution CTEs
+-- Assumption: CONNECTION_ALLOCATIONS has a CSP_ID column -- verify and rename if different
+cand_csp AS (
+  SELECT DISTINCT
+    ac.execution_candidate_id,
+    ca.MOBILE_NUMBER AS csp_mobile
+  FROM all_candidates ac
+  JOIN PROD_DB.CSP_DEMAND_ALLOCATION_SERVICE_CSP_DEMAND_ALLOCATION_SERVICE.CONNECTION_ALLOCATIONS a
+    ON a.CONNECTION_ID = ac.connection_id
+    AND a.ALLOCATION_STATE IN ('ASSIGNED','ACCEPTED','ACTIVE','RELEASED')
+  JOIN PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT ca
+    ON ca.csp_id = a.CSP_ID
+),
+-- Use _FIVETRAN_START as creation proxy (all history rows, not just active)
+cand_creation AS (
+  SELECT execution_candidate_id,
+    MIN(_FIVETRAN_START) AS cand_created_at
+  FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES
+  WHERE execution_candidate_id IN (SELECT execution_candidate_id FROM all_candidates)
+  GROUP BY 1
+),
+-- Attribution window: WA events in [cand_created_at, next_cand_created_at) -> this candidate
+cand_window AS (
+  SELECT
+    cc.execution_candidate_id,
+    cc.csp_mobile,
+    cr.cand_created_at,
+    LEAD(cr.cand_created_at) OVER (
+      PARTITION BY cc.csp_mobile ORDER BY cr.cand_created_at
+    ) AS next_cand_at
+  FROM cand_csp cc
+  JOIN cand_creation cr ON cc.execution_candidate_id = cr.execution_candidate_id
+),
+wa_raw AS (
+  SELECT
+    event_type,
+    timestamp        AS wa_ts,
+    RIGHT(DEST_ADDR, 10) AS csp_mobile_10
+  FROM GUPSHUP_EVENTS
+  WHERE HSM_TEMPLATE_ID = '8759388'
+    AND event_type IN ('SENT', 'DELIVERED')
+    AND DATE(timestamp) >= CURRENT_DATE - 30
+),
+wa_attributed AS (
+  SELECT
+    cw.execution_candidate_id,
+    wr.event_type
+  FROM wa_raw wr
+  JOIN cand_window cw
+    ON RIGHT(cw.csp_mobile, 10) = wr.csp_mobile_10
+    AND wr.wa_ts >= cw.cand_created_at
+    AND (cw.next_cand_at IS NULL OR wr.wa_ts < cw.next_cand_at)
+),
+wa_cand AS (
+  SELECT
+    execution_candidate_id,
+    MAX(CASE WHEN event_type = 'SENT'      THEN 1 ELSE 0 END) AS wa_sent,
+    MAX(CASE WHEN event_type = 'DELIVERED' THEN 1 ELSE 0 END) AS wa_delivered
+  FROM wa_attributed
   GROUP BY 1
 ),
 candidate_level AS (
@@ -308,14 +444,17 @@ candidate_level AS (
     COALESCE(ct.pn_clicked,        0) AS pn_clicked,
     COALESCE(ct.fpn_delivered,     0) AS fpn_delivered,
     COALESCE(ct.fpn_clicked,       0) AS fpn_clicked,
+    COALESCE(wc.wa_sent,           0) AS wa_sent,
+    COALESCE(wc.wa_delivered,      0) AS wa_delivered,
     COALESCE(ct.drilldown_opened,  0) AS drilldown_opened,
     COALESCE(ct.slot_pn_sent,      0) AS slot_pn_sent,
     COALESCE(ct.slot_pn_delivered, 0) AS slot_pn_delivered,
     COALESCE(ct.tech_pn_sent,      0) AS tech_pn_sent,
     COALESCE(ct.tech_pn_delivered, 0) AS tech_pn_delivered,
-    CASE WHEN COALESCE(ct.pn_delivered,0)=1 OR COALESCE(ct.fpn_delivered,0)=1
+    -- Change 3: attention and install_task_open now include WA delivered
+    CASE WHEN COALESCE(ct.pn_delivered,0)=1 OR COALESCE(ct.fpn_delivered,0)=1 OR COALESCE(wc.wa_delivered,0)=1
          THEN 1 ELSE 0 END            AS attention_delivered,
-    CASE WHEN COALESCE(ct.fpn_delivered,0)=1 OR COALESCE(ct.drilldown_opened,0)=1
+    CASE WHEN COALESCE(ct.fpn_delivered,0)=1 OR COALESCE(ct.drilldown_opened,0)=1 OR COALESCE(wc.wa_delivered,0)=1
          THEN 1 ELSE 0 END            AS install_task_open,
     CASE WHEN ac.proposed_slot_date IS NOT NULL THEN 1 ELSE 0 END AS slot_proposed,
     CASE WHEN ac.current_state = 'DECLINED'     THEN 1 ELSE 0 END AS slot_declined,
@@ -328,6 +467,9 @@ candidate_level AS (
     CASE WHEN sr.execution_candidate_id IS NOT NULL THEN 1 ELSE 0 END AS slot_remind_sent,
     CASE WHEN ac.confirmed_slot_at IS NOT NULL  THEN 1 ELSE 0 END AS slot_confirmed,
     CASE WHEN ac.executor_id IS NOT NULL        THEN 1 ELSE 0 END AS tech_assigned,
+    -- Change 4: not-self flag
+    CASE WHEN ac.executor_id IS NOT NULL AND COALESCE(ac.is_self_assigned, TRUE) = FALSE
+         THEN 1 ELSE 0 END            AS tech_assigned_not_self,
     CASE WHEN ac.confirmed_slot_at IS NOT NULL
           AND (
             (st.tech_assigned_at IS NULL AND DATEDIFF('minute', ac.confirmed_slot_at, CURRENT_TIMESTAMP) > 60)
@@ -356,7 +498,7 @@ candidate_level AS (
           AND ac.current_state NOT IN (
               'CANCELLED_BY_CUSTOMER','DECLINED','CONNECTION_ACTIVE','INSTALLATION_REPORTED_FAILED',
               'AWAITING_CUSTOMER_SLOT_CONFIRMATION','SLOT_CONFIRMED',
-              'TECHNICIAN_ASSIGNED','TECHNICIAN_EN_ROUTE','INSTALLATION_IN_PROGRESS'
+              'install_task_assigned','TECHNICIAN_EN_ROUTE','INSTALLATION_IN_PROGRESS'
           )
           AND NOT (ac.current_state = 'CANCELLED_BY_UPSTREAM' AND COALESCE(ac.reason_code,'') != 'TIMEOUT_P41')
          THEN 1 ELSE 0 END            AS p41_eligible,
@@ -373,6 +515,7 @@ candidate_level AS (
   LEFT JOIN slot_timing st ON ac.execution_candidate_id = st.execution_candidate_id
   LEFT JOIN slot_remind sr ON ac.execution_candidate_id = sr.execution_candidate_id
   LEFT JOIN tech_remind tr ON ac.execution_candidate_id = tr.execution_candidate_id
+  LEFT JOIN wa_cand     wc ON ac.execution_candidate_id = wc.execution_candidate_id
 ),
 daily_cand AS (
   SELECT booking_date AS dt,
@@ -382,6 +525,8 @@ daily_cand AS (
     SUM(CASE WHEN pn_delivered=1 AND pn_clicked=1 THEN 1 ELSE 0 END)                 AS pn_clicked_count,
     SUM(fpn_delivered)                                                                AS fpn_delivered_count,
     SUM(CASE WHEN fpn_delivered=1 AND fpn_clicked=1 THEN 1 ELSE 0 END)               AS fpn_clicked_count,
+    SUM(wa_sent)                                                                      AS wa_sent_count,
+    SUM(wa_delivered)                                                                 AS wa_delivered_count,
     SUM(attention_delivered)                                                          AS attention_count,
     SUM(drilldown_opened)                                                             AS drilldown_opened_count,
     SUM(install_task_open)                                                            AS install_task_open_count,
@@ -393,6 +538,7 @@ daily_cand AS (
     SUM(slot_pn_sent)                                                                 AS slot_pn_sent_count,
     SUM(slot_pn_delivered)                                                            AS slot_pn_delivered_count,
     SUM(tech_assigned)                                                                AS tech_assigned_count,
+    SUM(tech_assigned_not_self)                                                       AS tech_assigned_not_self_count,
     SUM(tech_pn_sent)                                                                 AS tech_pn_sent_count,
     SUM(tech_pn_delivered)                                                            AS tech_pn_delivered_count,
     SUM(no_tech_within_1h)                                                            AS no_tech_within_1h_count,
@@ -428,53 +574,49 @@ SELECT sort_ord, metric_name,
   MAX(CASE WHEN dt = CURRENT_DATE - 6 THEN val END) AS "T-6",
   MAX(CASE WHEN dt = CURRENT_DATE - 7 THEN val END) AS "T-7",
   MAX(CASE WHEN dt = CURRENT_DATE - 8 THEN val END) AS "T-8",
-  ROUND(AVG(CASE WHEN dt BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1 THEN val::FLOAT END), 1) AS "Average",
+  ROUND(AVG(CASE WHEN dt BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1 THEN val::FLOAT END), 1) AS "Mean",
   MEDIAN(CASE WHEN dt BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1 THEN val::FLOAT END)        AS "Median",
   ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CASE WHEN dt BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1 THEN val::FLOAT END), 1) AS "P90"
 FROM (
-  SELECT  0, '# Bookings Confirmed',                                        dt, total_bookings              FROM daily_conn
-  UNION ALL SELECT  1, 'H1: # Connections Created (CLOS)',                  dt, clos_count                  FROM daily_conn
-  UNION ALL SELECT  2, 'H2: # Connections Reached DAS',                     dt, das_count                   FROM daily_conn
-  UNION ALL SELECT  3, 'H3: # Tasks Created (TAS)',                         dt, tas_count                   FROM daily_conn
-  UNION ALL SELECT  4, '# Total Candidates (all cohort)',                   dt, total_candidates            FROM daily_cand
-  UNION ALL SELECT  5, 'PN: # Sent to CSP',                                 dt, pn_sent_count               FROM daily_cand
-  UNION ALL SELECT  6, 'PN: # Delivered',                                   dt, pn_delivered_count          FROM daily_cand
-  UNION ALL SELECT  7, 'PN: # Clicked',                                     dt, pn_clicked_count            FROM daily_cand
-  UNION ALL SELECT  8, 'FPN: # Delivered',                                  dt, fpn_delivered_count         FROM daily_cand
-  UNION ALL SELECT  9, 'FPN: # Clicked',                                    dt, fpn_clicked_count           FROM daily_cand
-  UNION ALL SELECT 10, 'Task Attention (PN or FPN delivered)',               dt, attention_count             FROM daily_cand
-  UNION ALL SELECT 11, 'Drilldown Open',                                    dt, drilldown_opened_count      FROM daily_cand
-  UNION ALL SELECT 12, 'Install Task Open (FPN delivered or Drilldown)',    dt, install_task_open_count     FROM daily_cand
-  UNION ALL SELECT 13, 'Slot Proposed by CSP',                              dt, slot_proposed_count         FROM daily_cand
-  UNION ALL SELECT 14, 'Slot Declined by Customer',                         dt, slot_declined_count         FROM daily_cand
-  UNION ALL SELECT 15, 'No Slot Proposed within 1h',                        dt, no_slot_within_1h_count     FROM daily_cand
-  UNION ALL SELECT 16, 'Slot Propose Reminder Sent',                        dt, slot_remind_sent_count      FROM daily_cand
-  UNION ALL SELECT 17, 'Slot Confirmed by Customer',                        dt, slot_confirmed_count        FROM daily_cand
-  UNION ALL SELECT 18, 'Slot Confirm PN: # Sent',                           dt, slot_pn_sent_count          FROM daily_cand
-  UNION ALL SELECT 19, 'Slot Confirm PN: # Delivered',                      dt, slot_pn_delivered_count     FROM daily_cand
-  UNION ALL SELECT 20, 'Technician Assigned',                               dt, tech_assigned_count         FROM daily_cand
-  UNION ALL SELECT 21, 'Tech Assigned PN: # Sent',                          dt, tech_pn_sent_count          FROM daily_cand
-  UNION ALL SELECT 22, 'Tech Assigned PN: # Delivered',                     dt, tech_pn_delivered_count     FROM daily_cand
-  UNION ALL SELECT 23, 'No Tech Assigned within 1h',                        dt, no_tech_within_1h_count     FROM daily_cand
-  UNION ALL SELECT 24, 'Tech Assignment Urgent Reminder Sent',               dt, tech_remind_sent_count      FROM daily_cand
-  UNION ALL SELECT 25, 'Technician Arrived at Site',                        dt, tech_arrived_count          FROM daily_cand
-  UNION ALL SELECT 26, 'Step: Selfie',                                      dt, step_selfie_count           FROM daily_cand
-  UNION ALL SELECT 27, 'Step: Aadhaar',                                     dt, step_aadhar_count           FROM daily_cand
-  UNION ALL SELECT 28, 'Step: Security Fee Paid',                           dt, step_sec_fee_count          FROM daily_cand
-  UNION ALL SELECT 29, 'Step: Shared',                                      dt, step_shared_count           FROM daily_cand
-  UNION ALL SELECT 30, 'Step: Connection Info',                             dt, step_conn_info_count        FROM daily_cand
-  UNION ALL SELECT 31, 'Step: Device Photo',                                dt, step_device_photo_count     FROM daily_cand
-  UNION ALL SELECT 32, 'Step: Speed Test',                                  dt, step_speed_test_count       FROM daily_cand
-  UNION ALL SELECT 33, 'Step: Happy Code Pending',                          dt, step_hc_pending_count       FROM daily_cand
-  UNION ALL SELECT 34, 'Step: Happy Code Verified (OTP)',                   dt, step_otp_count              FROM daily_cand
-  UNION ALL SELECT 35, 'Step: Customer Rating',                             dt, step_rating_count           FROM daily_cand
-  UNION ALL SELECT 36, 'Cancelled by Customer',                             dt, cancelled_by_customer_count FROM daily_cand
-  UNION ALL SELECT 37, 'Cancelled by Upstream',                             dt, cancelled_by_upstream_count FROM daily_cand
-  UNION ALL SELECT 38, 'Installation Reported Failed',                      dt, install_failed_count        FROM daily_cand
-  UNION ALL SELECT 39, 'P41: # Eligible (no slot proposed, deadline hit)',   dt, p41_eligible_count          FROM daily_cand
-  UNION ALL SELECT 40, 'P41: # Timeout Triggered',                          dt, p41_timeout_count           FROM daily_cand
-  UNION ALL SELECT 41, 'P74: # Eligible (slot confirmed, 72h deadline hit)', dt, p74_eligible_count          FROM daily_cand
-  UNION ALL SELECT 42, 'P74: # Timeout Triggered',                          dt, p74_timeout_count           FROM daily_cand
+  SELECT  0, '# Bookings Confirmed',                                        dt, total_bookings                   FROM daily_conn
+  UNION ALL SELECT  1, 'H1: # Connections Created (CLOS)',                  dt, clos_count                       FROM daily_conn
+  UNION ALL SELECT  2, 'H2: # Connections Reached DAS',                     dt, das_count                        FROM daily_conn
+  UNION ALL SELECT  3, 'H3: # Tasks Created (TAS)',                         dt, tas_count                        FROM daily_conn
+  UNION ALL SELECT  4, '# Total Candidates (all cohort)',                   dt, total_candidates                 FROM daily_cand
+  UNION ALL SELECT  5, 'PN: # Sent to CSP',                                 dt, pn_sent_count                    FROM daily_cand
+  UNION ALL SELECT  6, 'PN: # Delivered',                                   dt, pn_delivered_count               FROM daily_cand
+  UNION ALL SELECT  7, 'PN: # Clicked',                                     dt, pn_clicked_count                 FROM daily_cand
+  UNION ALL SELECT  8, 'FPN: # Delivered',                                  dt, fpn_delivered_count              FROM daily_cand
+  UNION ALL SELECT  9, 'FPN: # Clicked',                                    dt, fpn_clicked_count                FROM daily_cand
+  UNION ALL SELECT 10, 'WA: # Sent',                                        dt, wa_sent_count                    FROM daily_cand
+  UNION ALL SELECT 11, 'WA: # Delivered',                                   dt, wa_delivered_count               FROM daily_cand
+  UNION ALL SELECT 12, 'Task Attention (PN, FPN, or WA delivered)',          dt, attention_count                  FROM daily_cand
+  UNION ALL SELECT 13, 'Drilldown Open',                                    dt, drilldown_opened_count           FROM daily_cand
+  UNION ALL SELECT 14, 'Install Task Open (FPN, Drilldown, or WA)',         dt, install_task_open_count          FROM daily_cand
+  UNION ALL SELECT 15, 'Slot Declined by CSP',                              dt, slot_declined_count              FROM daily_cand
+  UNION ALL SELECT 16, 'Technician Assigned',                               dt, tech_assigned_count              FROM daily_cand
+  UNION ALL SELECT 17, 'Technician Assigned (not self)',                    dt, tech_assigned_not_self_count     FROM daily_cand
+  UNION ALL SELECT 18, 'Tech Assigned PN: # Sent',                          dt, tech_pn_sent_count               FROM daily_cand
+  UNION ALL SELECT 19, 'Tech Assigned PN: # Delivered',                     dt, tech_pn_delivered_count          FROM daily_cand
+--   UNION ALL SELECT 20, 'No Tech Assigned within 1h',                        dt, no_tech_within_1h_count          FROM daily_cand
+  UNION ALL SELECT 21, 'Technician Arrived at Site',                        dt, tech_arrived_count               FROM daily_cand
+  UNION ALL SELECT 22, 'Step: Selfie',                                      dt, step_selfie_count                FROM daily_cand
+  UNION ALL SELECT 23, 'Step: Aadhaar',                                     dt, step_aadhar_count                FROM daily_cand
+  UNION ALL SELECT 24, 'Step: Security Fee Paid',                           dt, step_sec_fee_count               FROM daily_cand
+  UNION ALL SELECT 25, 'Step: Shared',                                      dt, step_shared_count                FROM daily_cand
+  UNION ALL SELECT 26, 'Step: Connection Info',                             dt, step_conn_info_count             FROM daily_cand
+  UNION ALL SELECT 27, 'Step: Device Photo',                                dt, step_device_photo_count          FROM daily_cand
+  UNION ALL SELECT 28, 'Step: Speed Test',                                  dt, step_speed_test_count            FROM daily_cand
+  UNION ALL SELECT 29, 'Step: Happy Code Pending',                          dt, step_hc_pending_count            FROM daily_cand
+  UNION ALL SELECT 30, 'Step: Happy Code Verified (OTP)',                   dt, step_otp_count                   FROM daily_cand
+  UNION ALL SELECT 31, 'Step: Customer Rating',                             dt, step_rating_count                FROM daily_cand
+  UNION ALL SELECT 32, 'Cancelled by Customer',                             dt, cancelled_by_customer_count      FROM daily_cand
+  UNION ALL SELECT 33, 'Cancelled by Upstream',                             dt, cancelled_by_upstream_count      FROM daily_cand
+  UNION ALL SELECT 34, 'Installation Reported Failed',                      dt, install_failed_count             FROM daily_cand
+  UNION ALL SELECT 35, 'P41: # Eligible (no slot proposed, deadline hit)',   dt, p41_eligible_count               FROM daily_cand
+  UNION ALL SELECT 36, 'P41: # Timeout Triggered',                          dt, p41_timeout_count                FROM daily_cand
+  UNION ALL SELECT 37, 'P74: # Eligible (slot confirmed, 72h deadline hit)', dt, p74_eligible_count               FROM daily_cand
+  UNION ALL SELECT 38, 'P74: # Timeout Triggered',                          dt, p74_timeout_count                FROM daily_cand
 ) m (sort_ord, metric_name, dt, val)
 GROUP BY sort_ord, metric_name
 ORDER BY sort_ord
@@ -523,7 +665,8 @@ all_candidates AS (
         iec.P41_DEADLINE_AT, iec.P74_DEADLINE_AT, iec.CONFIRMED_SLOT_AT,
         iec.PROPOSED_SLOT_DATE, iec.EXECUTOR_ID, iec.CURRENT_STATE,
         iec.COMPLETED_STEP, iec.SECURITY_FEE_PAID_AT, iec.OTP_VERIFIED,
-        iec.CUSTOMER_RATING, iec.FAILURE_REASON, iec.REASON_CODE, iec.CREATED_AT
+        iec.CUSTOMER_RATING, iec.FAILURE_REASON, iec.REASON_CODE, iec.CREATED_AT,
+        iec.IS_SELF_ASSIGNED
     FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES iec
     JOIN bookings_base b ON b.CONNECTION_ID = iec.CONNECTION_ID
     WHERE iec._FIVETRAN_ACTIVE = TRUE
@@ -570,12 +713,7 @@ ct_events AS (
              THEN 1 ELSE 0 END)                                                    AS install_candidate_opened,
         MAX(CASE WHEN EVENT_NAME = 'install_customer_slot_confirmed'
              THEN 1 ELSE 0 END)                                                    AS install_customer_slot_confirmed,
-        MAX(CASE WHEN EVENT_NAME = 'pn_delivered'
-                  AND JSON_EXTRACT_PATH_TEXT(PROPERTIES,'pn_type') IN (
-                      'ES_INSTALL_CUSTOMER_SLOT_CONFIRMED',
-                      'ES_INSTALL_CUSTOMER_SLOT_CONFIRMED_ESCALATION'
-                  )
-             THEN 1 ELSE 0 END)                                                    AS slot_confirm_pn_delivered,
+        COUNT(CASE WHEN EVENT_NAME = 'install_task_assigned'                        THEN 1 END) AS tech_pn_sent,
         MAX(CASE WHEN EVENT_NAME = 'pn_delivered'
                   AND JSON_EXTRACT_PATH_TEXT(PROPERTIES,'pn_type') IN (
                       'ES_INSTALL_TECHNICIAN_ASSIGNED',
@@ -585,6 +723,63 @@ ct_events AS (
     FROM PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA
     WHERE JSON_EXTRACT_PATH_TEXT(PROPERTIES, 'execution_id') IS NOT NULL
       AND JSON_EXTRACT_PATH_TEXT(PROPERTIES, 'execution_id') != ''
+    GROUP BY 1
+),
+cand_csp AS (
+    SELECT DISTINCT
+        ac.execution_candidate_id,
+        ca.MOBILE_NUMBER AS csp_mobile
+    FROM all_candidates ac
+    JOIN PROD_DB.CSP_DEMAND_ALLOCATION_SERVICE_CSP_DEMAND_ALLOCATION_SERVICE.CONNECTION_ALLOCATIONS a
+        ON a.CONNECTION_ID = ac.CONNECTION_ID
+        AND a.ALLOCATION_STATE IN ('ASSIGNED','ACCEPTED','ACTIVE','RELEASED')
+    JOIN PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT ca
+        ON ca.csp_id = a.CSP_ID
+),
+cand_creation AS (
+    SELECT execution_candidate_id,
+        MIN(_FIVETRAN_START) AS cand_created_at
+    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES
+    WHERE execution_candidate_id IN (SELECT execution_candidate_id FROM all_candidates)
+    GROUP BY 1
+),
+cand_window AS (
+    SELECT
+        cc.execution_candidate_id,
+        cc.csp_mobile,
+        cr.cand_created_at,
+        LEAD(cr.cand_created_at) OVER (
+            PARTITION BY cc.csp_mobile ORDER BY cr.cand_created_at
+        ) AS next_cand_at
+    FROM cand_csp cc
+    JOIN cand_creation cr ON cc.execution_candidate_id = cr.execution_candidate_id
+),
+wa_raw AS (
+    SELECT
+        event_type,
+        timestamp        AS wa_ts,
+        RIGHT(DEST_ADDR, 10) AS csp_mobile_10
+    FROM GUPSHUP_EVENTS
+    WHERE HSM_TEMPLATE_ID = '8759388'
+        AND event_type IN ('SENT', 'DELIVERED')
+        AND DATE(timestamp) >= CURRENT_DATE - 30
+),
+wa_attributed AS (
+    SELECT
+        cw.execution_candidate_id,
+        wr.event_type
+    FROM wa_raw wr
+    JOIN cand_window cw
+        ON RIGHT(cw.csp_mobile, 10) = wr.csp_mobile_10
+        AND wr.wa_ts >= cw.cand_created_at
+        AND (cw.next_cand_at IS NULL OR wr.wa_ts < cw.next_cand_at)
+),
+wa_cand AS (
+    SELECT
+        execution_candidate_id,
+        MAX(CASE WHEN event_type = 'SENT'      THEN 1 ELSE 0 END) AS wa_sent,
+        MAX(CASE WHEN event_type = 'DELIVERED' THEN 1 ELSE 0 END) AS wa_delivered
+    FROM wa_attributed
     GROUP BY 1
 ),
 candidate_level AS (
@@ -597,12 +792,15 @@ candidate_level AS (
         COALESCE(ct.fpn_sent_flag, 0)               AS fpn_sent,
         COALESCE(ct.fpn_delivered, 0)               AS fpn_delivered,
         COALESCE(ct.fpn_action_taken, 0)            AS fpn_action_taken,
+        COALESCE(wc.wa_sent, 0)                     AS wa_sent,
+        COALESCE(wc.wa_delivered, 0)                AS wa_delivered,
         CASE WHEN COALESCE(ct.pn_delivered,0)=1
-              OR COALESCE(ct.fpn_delivered,0)=1     THEN 1 ELSE 0 END AS task_attention,
+              OR COALESCE(ct.fpn_delivered,0)=1
+              OR COALESCE(wc.wa_delivered,0)=1      THEN 1 ELSE 0 END AS task_attention,
         COALESCE(ct.install_candidate_opened, 0)    AS drilldown_open,
         CASE WHEN COALESCE(ct.fpn_delivered,0)=1
               OR COALESCE(ct.install_candidate_opened,0)=1
-                                                    THEN 1 ELSE 0 END AS install_task_open,
+              OR COALESCE(wc.wa_delivered,0)=1      THEN 1 ELSE 0 END AS install_task_open,
         CASE WHEN ac.PROPOSED_SLOT_DATE IS NOT NULL THEN 1 ELSE 0 END AS slot_proposed,
         CASE WHEN (
             (st.slot_proposed_at IS NULL
@@ -612,8 +810,10 @@ candidate_level AS (
         )                                           THEN 1 ELSE 0 END AS no_slot_within_1h,
         CASE WHEN sr.EXECUTION_CANDIDATE_ID IS NOT NULL THEN 1 ELSE 0 END AS slot_remind_sent,
         CASE WHEN ac.CONFIRMED_SLOT_AT IS NOT NULL  THEN 1 ELSE 0 END AS slot_confirmed,
-        COALESCE(ct.slot_confirm_pn_delivered, 0)  AS slot_confirm_pn_delivered,
         CASE WHEN ac.EXECUTOR_ID IS NOT NULL        THEN 1 ELSE 0 END AS tech_assigned,
+        CASE WHEN ac.EXECUTOR_ID IS NOT NULL AND COALESCE(ac.IS_SELF_ASSIGNED, TRUE) = FALSE
+             THEN 1 ELSE 0 END                     AS tech_assigned_not_self,
+        COALESCE(ct.tech_pn_sent, 0)               AS tech_pn_sent,
         COALESCE(ct.tech_pn_delivered, 0)          AS tech_pn_delivered,
         CASE WHEN tr.EXECUTION_CANDIDATE_ID IS NOT NULL THEN 1 ELSE 0 END AS tech_remind_sent,
         CASE WHEN COALESCE(ac.COMPLETED_STEP,0) >= 1 THEN 1 ELSE 0 END AS step_selfie,
@@ -656,6 +856,7 @@ candidate_level AS (
     LEFT JOIN slot_remind  sr ON sr.EXECUTION_CANDIDATE_ID = ac.EXECUTION_CANDIDATE_ID
     LEFT JOIN tech_remind  tr ON tr.EXECUTION_CANDIDATE_ID = ac.EXECUTION_CANDIDATE_ID
     LEFT JOIN ct_events    ct ON ct.execution_id = ac.EXECUTION_CANDIDATE_ID
+    LEFT JOIN wa_cand      wc ON wc.execution_candidate_id = ac.EXECUTION_CANDIDATE_ID
 ),
 daily_cand AS (
     SELECT
@@ -667,6 +868,8 @@ daily_cand AS (
         SUM(fpn_sent)                  AS fpn_sent,
         SUM(fpn_delivered)             AS fpn_delivered,
         SUM(fpn_action_taken)          AS fpn_action_taken,
+        SUM(wa_sent)                   AS wa_sent,
+        SUM(wa_delivered)              AS wa_delivered,
         SUM(task_attention)            AS task_attention,
         SUM(drilldown_open)            AS drilldown_open,
         SUM(install_task_open)         AS install_task_open,
@@ -674,8 +877,9 @@ daily_cand AS (
         SUM(no_slot_within_1h)         AS no_slot_within_1h,
         SUM(slot_remind_sent)          AS slot_remind_sent,
         SUM(slot_confirmed)            AS slot_confirmed,
-        SUM(slot_confirm_pn_delivered) AS slot_confirm_pn_delivered,
         SUM(tech_assigned)             AS tech_assigned,
+        SUM(tech_assigned_not_self)    AS tech_assigned_not_self,
+        SUM(tech_pn_sent)             AS tech_pn_sent,
         SUM(tech_pn_delivered)         AS tech_pn_delivered,
         SUM(tech_remind_sent)          AS tech_remind_sent,
         SUM(step_selfie)               AS step_selfie,
@@ -708,10 +912,12 @@ rates_joined AS (
         cd.pn_delivered   * 1.0 / NULLIF(cd.pn_sent, 0)                  AS pn_delivery_rate,
         cd.fpn_sent       * 1.0 / NULLIF(cd.total_candidates, 0)         AS fpn_sent_rate,
         cd.fpn_delivered  * 1.0 / NULLIF(cd.fpn_sent, 0)                 AS fpn_delivery_rate,
+        cd.wa_sent        * 1.0 / NULLIF(cd.total_candidates, 0)        AS wa_sent_rate,
+        cd.wa_delivered   * 1.0 / NULLIF(cd.wa_sent, 0)                 AS wa_delivery_rate,
         cd.task_attention * 1.0 / NULLIF(cd.total_candidates, 0)         AS task_reach_rate,
         cd.p41_timeout    * 1.0 / NULLIF(cd.p41_eligible, 0)             AS p41_timeout_rate,
         cd.slot_remind_sent * 1.0 / NULLIF(cd.no_slot_within_1h, 0)      AS slot_remind_rate,
-        cd.slot_confirm_pn_delivered * 1.0 / NULLIF(cd.slot_proposed, 0) AS slot_confirm_pn_delivery_rate,
+        cd.tech_assigned_not_self * 1.0 / NULLIF(cd.slot_confirmed, 0)   AS tech_not_self_rate,
         cd.tech_remind_sent * 1.0 / NULLIF(cd.slot_confirmed, 0)         AS tech_remind_rate,
         cd.tech_pn_delivered * 1.0 / NULLIF(cd.tech_assigned, 0)         AS tech_pn_delivery_rate,
         cd.p74_timeout      * 1.0 / NULLIF(cd.p74_eligible, 0)           AS p74_timeout_rate,
@@ -727,14 +933,16 @@ rates_long AS (
     UNION ALL SELECT 5,  'Install PN Delivery Rate',        booking_date, pn_delivery_rate            FROM rates_joined
     UNION ALL SELECT 6,  'FPN Sent Rate',                   booking_date, fpn_sent_rate               FROM rates_joined
     UNION ALL SELECT 7,  'FPN Delivery Rate',               booking_date, fpn_delivery_rate           FROM rates_joined
-    UNION ALL SELECT 8,  'Task Reach Rate',                 booking_date, task_reach_rate             FROM rates_joined
-    UNION ALL SELECT 9,  'P41 Timeout Rate',                booking_date, p41_timeout_rate            FROM rates_joined
-    UNION ALL SELECT 10, 'Slot Proposal Reminder Rate',     booking_date, slot_remind_rate            FROM rates_joined
-    UNION ALL SELECT 11, 'Slot Confirm PN Delivery Rate',   booking_date, slot_confirm_pn_delivery_rate FROM rates_joined
-    UNION ALL SELECT 12, 'Tech Assignment Reminder Rate',   booking_date, tech_remind_rate            FROM rates_joined
-    UNION ALL SELECT 13, 'Tech PN Delivery Rate',           booking_date, tech_pn_delivery_rate       FROM rates_joined
-    UNION ALL SELECT 14, 'P74 Timeout Rate',                booking_date, p74_timeout_rate            FROM rates_joined
-    UNION ALL SELECT 15, 'Connection Active Rate',          booking_date, conn_active_rate            FROM rates_joined
+    UNION ALL SELECT 8,  'WA Sent Rate',                    booking_date, wa_sent_rate                FROM rates_joined
+    UNION ALL SELECT 9,  'WA Delivery Rate',                booking_date, wa_delivery_rate            FROM rates_joined
+    UNION ALL SELECT 10, 'Task Reach Rate',                 booking_date, task_reach_rate             FROM rates_joined
+    UNION ALL SELECT 11, 'P41 Timeout Rate',                booking_date, p41_timeout_rate            FROM rates_joined
+    UNION ALL SELECT 12, 'Slot Proposal Reminder Rate',     booking_date, slot_remind_rate            FROM rates_joined
+    UNION ALL SELECT 13, 'Tech Assigned (not self) Rate',   booking_date, tech_not_self_rate          FROM rates_joined
+    UNION ALL SELECT 14, 'Tech Assignment Reminder Rate',   booking_date, tech_remind_rate            FROM rates_joined
+    UNION ALL SELECT 15, 'Tech PN Delivery Rate',           booking_date, tech_pn_delivery_rate       FROM rates_joined
+    UNION ALL SELECT 16, 'P74 Timeout Rate',                booking_date, p74_timeout_rate            FROM rates_joined
+    UNION ALL SELECT 17, 'Connection Active Rate',          booking_date, conn_active_rate            FROM rates_joined
 )
 SELECT
     metric AS METRIC_NAME,
@@ -768,7 +976,7 @@ all_candidates AS (
         iec.P41_DEADLINE_AT, iec.P74_DEADLINE_AT, iec.CONFIRMED_SLOT_AT,
         iec.PROPOSED_SLOT_DATE, iec.EXECUTOR_ID, iec.CURRENT_STATE,
         iec.COMPLETED_STEP, iec.SECURITY_FEE_PAID_AT, iec.OTP_VERIFIED,
-        iec.CUSTOMER_RATING, iec.FAILURE_REASON
+        iec.CUSTOMER_RATING, iec.FAILURE_REASON, iec.IS_SELF_ASSIGNED
     FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES iec
     JOIN bookings_base b ON b.CONNECTION_ID = iec.CONNECTION_ID
     WHERE iec._FIVETRAN_ACTIVE = TRUE
@@ -789,10 +997,68 @@ ct_events AS (
         MAX(CASE WHEN EVENT_NAME = 'fpn_action_taken'
                   AND JSON_EXTRACT_PATH_TEXT(PROPERTIES,'pn_type') = 'ES_INSTALL_CANDIDATE_CREATED'
                                                                                          THEN 1 ELSE 0 END) AS fpn_action_taken,
-        MAX(CASE WHEN EVENT_NAME = 'install_candidate_opened'                            THEN 1 ELSE 0 END) AS install_candidate_opened
+        MAX(CASE WHEN EVENT_NAME = 'install_candidate_opened'                            THEN 1 ELSE 0 END) AS install_candidate_opened,
+        COUNT(CASE WHEN EVENT_NAME = 'install_task_assigned'                              THEN 1 END)        AS tech_pn_sent
     FROM PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA
     WHERE JSON_EXTRACT_PATH_TEXT(PROPERTIES, 'execution_id') IS NOT NULL
       AND JSON_EXTRACT_PATH_TEXT(PROPERTIES, 'execution_id') != ''
+    GROUP BY 1
+),
+cand_csp AS (
+    SELECT DISTINCT
+        ac.EXECUTION_CANDIDATE_ID AS execution_candidate_id,
+        ca.MOBILE_NUMBER AS csp_mobile
+    FROM all_candidates ac
+    JOIN PROD_DB.CSP_DEMAND_ALLOCATION_SERVICE_CSP_DEMAND_ALLOCATION_SERVICE.CONNECTION_ALLOCATIONS a
+        ON a.CONNECTION_ID = ac.CONNECTION_ID
+        AND a.ALLOCATION_STATE IN ('ASSIGNED','ACCEPTED','ACTIVE','RELEASED')
+    JOIN PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT ca
+        ON ca.csp_id = a.CSP_ID
+),
+cand_creation AS (
+    SELECT execution_candidate_id,
+        MIN(_FIVETRAN_START) AS cand_created_at
+    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES
+    WHERE execution_candidate_id IN (SELECT EXECUTION_CANDIDATE_ID FROM all_candidates)
+    GROUP BY 1
+),
+cand_window AS (
+    SELECT
+        cc.execution_candidate_id,
+        cc.csp_mobile,
+        cr.cand_created_at,
+        LEAD(cr.cand_created_at) OVER (
+            PARTITION BY cc.csp_mobile ORDER BY cr.cand_created_at
+        ) AS next_cand_at
+    FROM cand_csp cc
+    JOIN cand_creation cr ON cc.execution_candidate_id = cr.execution_candidate_id
+),
+wa_raw AS (
+    SELECT
+        event_type,
+        timestamp        AS wa_ts,
+        RIGHT(DEST_ADDR, 10) AS csp_mobile_10
+    FROM GUPSHUP_EVENTS
+    WHERE HSM_TEMPLATE_ID = '8759388'
+        AND event_type IN ('SENT', 'DELIVERED')
+        AND DATE(timestamp) >= CURRENT_DATE - 30
+),
+wa_attributed AS (
+    SELECT
+        cw.execution_candidate_id,
+        wr.event_type
+    FROM wa_raw wr
+    JOIN cand_window cw
+        ON RIGHT(cw.csp_mobile, 10) = wr.csp_mobile_10
+        AND wr.wa_ts >= cw.cand_created_at
+        AND (cw.next_cand_at IS NULL OR wr.wa_ts < cw.next_cand_at)
+),
+wa_cand AS (
+    SELECT
+        execution_candidate_id,
+        MAX(CASE WHEN event_type = 'SENT'      THEN 1 ELSE 0 END) AS wa_sent,
+        MAX(CASE WHEN event_type = 'DELIVERED' THEN 1 ELSE 0 END) AS wa_delivered
+    FROM wa_attributed
     GROUP BY 1
 ),
 candidate_level AS (
@@ -803,13 +1069,18 @@ candidate_level AS (
         CASE WHEN COALESCE(ct.pn_delivered,0)=1 AND COALESCE(ct.pn_clicked,0)=1         THEN 1 ELSE 0 END AS pn_clicked,
         COALESCE(ct.fpn_delivered, 0)                                                                     AS fpn_delivered,
         CASE WHEN COALESCE(ct.fpn_delivered,0)=1 AND COALESCE(ct.fpn_action_taken,0)=1  THEN 1 ELSE 0 END AS fpn_action_taken,
+        COALESCE(wc.wa_sent, 0)                                                                           AS wa_sent,
+        COALESCE(wc.wa_delivered, 0)                                                                      AS wa_delivered,
         COALESCE(ct.install_candidate_opened, 0)                                                          AS drilldown_open,
         CASE WHEN COALESCE(ct.fpn_delivered,0)=1
-              OR  COALESCE(ct.install_candidate_opened,0)=1                              THEN 1 ELSE 0 END AS install_task_open,
+              OR  COALESCE(ct.install_candidate_opened,0)=1
+              OR  COALESCE(wc.wa_delivered,0)=1                                          THEN 1 ELSE 0 END AS install_task_open,
         CASE WHEN ac.CURRENT_STATE = 'DECLINED'       THEN 1 ELSE 0 END AS slot_declined,
         CASE WHEN ac.PROPOSED_SLOT_DATE IS NOT NULL   THEN 1 ELSE 0 END AS slot_proposed,
         CASE WHEN ac.CONFIRMED_SLOT_AT IS NOT NULL    THEN 1 ELSE 0 END AS slot_confirmed,
         CASE WHEN ac.EXECUTOR_ID IS NOT NULL          THEN 1 ELSE 0 END AS tech_assigned,
+        CASE WHEN ac.EXECUTOR_ID IS NOT NULL AND COALESCE(ac.IS_SELF_ASSIGNED, TRUE) = FALSE
+             THEN 1 ELSE 0 END                                         AS tech_assigned_not_self,
         CASE WHEN COALESCE(ac.COMPLETED_STEP,0) >= 1  THEN 1 ELSE 0 END AS step_selfie,
         CASE WHEN COALESCE(ac.COMPLETED_STEP,0) >= 2  THEN 1 ELSE 0 END AS step_aadhaar,
         CASE WHEN ac.SECURITY_FEE_PAID_AT IS NOT NULL THEN 1 ELSE 0 END AS step_fee,
@@ -833,6 +1104,7 @@ candidate_level AS (
               AND ac.CURRENT_STATE = 'CANCELLED_BY_UPSTREAM' THEN 1 ELSE 0 END AS p74_timeout
     FROM all_candidates ac
     LEFT JOIN ct_events ct ON ct.execution_id = ac.EXECUTION_CANDIDATE_ID
+    LEFT JOIN wa_cand   wc ON wc.execution_candidate_id = ac.EXECUTION_CANDIDATE_ID
 ),
 daily_cand AS (
     SELECT
@@ -843,12 +1115,15 @@ daily_cand AS (
         SUM(pn_clicked)           AS pn_clicked,
         SUM(fpn_delivered)        AS fpn_delivered,
         SUM(fpn_action_taken)     AS fpn_action_taken,
+        SUM(wa_sent)              AS wa_sent,
+        SUM(wa_delivered)         AS wa_delivered,
         SUM(drilldown_open)       AS drilldown_open,
         SUM(install_task_open)    AS install_task_open,
         SUM(slot_declined)        AS slot_declined,
         SUM(slot_proposed)        AS slot_proposed,
         SUM(slot_confirmed)       AS slot_confirmed,
         SUM(tech_assigned)        AS tech_assigned,
+        SUM(tech_assigned_not_self) AS tech_assigned_not_self,
         SUM(step_selfie)          AS step_selfie,
         SUM(step_aadhaar)         AS step_aadhaar,
         SUM(step_fee)             AS step_fee,
@@ -873,26 +1148,29 @@ counts_long AS (
     UNION ALL SELECT  3, '# PN Clicked',              booking_date, pn_clicked          FROM daily_cand
     UNION ALL SELECT  4, '# FPN Delivered',           booking_date, fpn_delivered       FROM daily_cand
     UNION ALL SELECT  5, '# FPN Action Taken',        booking_date, fpn_action_taken    FROM daily_cand
-    UNION ALL SELECT  6, '# Drilldown Open',          booking_date, drilldown_open      FROM daily_cand
-    UNION ALL SELECT  7, '# Install Task Open',       booking_date, install_task_open   FROM daily_cand
-    UNION ALL SELECT  8, '# Slot Declined',           booking_date, slot_declined       FROM daily_cand
-    UNION ALL SELECT  9, '# Slot Proposed',           booking_date, slot_proposed       FROM daily_cand
-    UNION ALL SELECT 10, '# Slot Confirmed',          booking_date, slot_confirmed      FROM daily_cand
-    UNION ALL SELECT 11, '# Tech Assigned',           booking_date, tech_assigned       FROM daily_cand
-    UNION ALL SELECT 12, '# Tech Arrived (Selfie)',   booking_date, step_selfie         FROM daily_cand
-    UNION ALL SELECT 13, '# Aadhaar Submitted',       booking_date, step_aadhaar        FROM daily_cand
-    UNION ALL SELECT 14, '# SD Fee Paid',             booking_date, step_fee            FROM daily_cand
-    UNION ALL SELECT 15, '# ISP Account Created',     booking_date, step_shared         FROM daily_cand
-    UNION ALL SELECT 16, '# Device ID Entry',         booking_date, step_conn_info      FROM daily_cand
-    UNION ALL SELECT 17, '# Device Photo',            booking_date, step_device_photo   FROM daily_cand
-    UNION ALL SELECT 18, '# Speed Test',              booking_date, step_speed_test     FROM daily_cand
-    UNION ALL SELECT 19, '# OTP Verified',            booking_date, step_otp_verified   FROM daily_cand
-    UNION ALL SELECT 20, '# Customer Rating',         booking_date, step_rating         FROM daily_cand
-    UNION ALL SELECT 21, '# Install Failed',          booking_date, install_failed      FROM daily_cand
-    UNION ALL SELECT 22, '# Cancelled by Customer',   booking_date, cancelled_cx        FROM daily_cand
-    UNION ALL SELECT 23, '# Cancelled by Upstream',   booking_date, cancelled_upstream  FROM daily_cand
-    UNION ALL SELECT 24, '# P41 Timeout',             booking_date, p41_timeout         FROM daily_cand
-    UNION ALL SELECT 25, '# P74 Timeout',             booking_date, p74_timeout         FROM daily_cand
+    UNION ALL SELECT  6, '# WA Sent',                 booking_date, wa_sent             FROM daily_cand
+    UNION ALL SELECT  7, '# WA Delivered',             booking_date, wa_delivered        FROM daily_cand
+    UNION ALL SELECT  8, '# Drilldown Open',          booking_date, drilldown_open      FROM daily_cand
+    UNION ALL SELECT  9, '# Install Task Open',       booking_date, install_task_open   FROM daily_cand
+    UNION ALL SELECT 10, '# Slot Declined',           booking_date, slot_declined       FROM daily_cand
+    UNION ALL SELECT 11, '# Slot Proposed',           booking_date, slot_proposed       FROM daily_cand
+    UNION ALL SELECT 12, '# Slot Confirmed',          booking_date, slot_confirmed      FROM daily_cand
+    UNION ALL SELECT 13, '# Tech Assigned',           booking_date, tech_assigned       FROM daily_cand
+    UNION ALL SELECT 14, '# Tech Assigned (not self)', booking_date, tech_assigned_not_self FROM daily_cand
+    UNION ALL SELECT 15, '# Tech Arrived (Selfie)',   booking_date, step_selfie         FROM daily_cand
+    UNION ALL SELECT 16, '# Aadhaar Submitted',       booking_date, step_aadhaar        FROM daily_cand
+    UNION ALL SELECT 17, '# SD Fee Paid',             booking_date, step_fee            FROM daily_cand
+    UNION ALL SELECT 18, '# ISP Account Created',     booking_date, step_shared         FROM daily_cand
+    UNION ALL SELECT 19, '# Device ID Entry',         booking_date, step_conn_info      FROM daily_cand
+    UNION ALL SELECT 20, '# Device Photo',            booking_date, step_device_photo   FROM daily_cand
+    UNION ALL SELECT 21, '# Speed Test',              booking_date, step_speed_test     FROM daily_cand
+    UNION ALL SELECT 22, '# OTP Verified',            booking_date, step_otp_verified   FROM daily_cand
+    UNION ALL SELECT 23, '# Customer Rating',         booking_date, step_rating         FROM daily_cand
+    UNION ALL SELECT 24, '# Install Failed',          booking_date, install_failed      FROM daily_cand
+    UNION ALL SELECT 25, '# Cancelled by Customer',   booking_date, cancelled_cx        FROM daily_cand
+    UNION ALL SELECT 26, '# Cancelled by Upstream',   booking_date, cancelled_upstream  FROM daily_cand
+    UNION ALL SELECT 27, '# P41 Timeout',             booking_date, p41_timeout         FROM daily_cand
+    UNION ALL SELECT 28, '# P74 Timeout',             booking_date, p74_timeout         FROM daily_cand
 )
 SELECT
     metric_name                                                     AS METRIC_NAME,
@@ -926,7 +1204,7 @@ all_candidates AS (
         iec.P41_DEADLINE_AT, iec.P74_DEADLINE_AT, iec.CONFIRMED_SLOT_AT,
         iec.PROPOSED_SLOT_DATE, iec.EXECUTOR_ID, iec.CURRENT_STATE,
         iec.COMPLETED_STEP, iec.SECURITY_FEE_PAID_AT, iec.OTP_VERIFIED,
-        iec.CUSTOMER_RATING, iec.FAILURE_REASON
+        iec.CUSTOMER_RATING, iec.FAILURE_REASON, iec.IS_SELF_ASSIGNED
     FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES iec
     JOIN bookings_base b ON b.CONNECTION_ID = iec.CONNECTION_ID
     WHERE iec._FIVETRAN_ACTIVE = TRUE
@@ -947,10 +1225,68 @@ ct_events AS (
         MAX(CASE WHEN EVENT_NAME = 'fpn_action_taken'
                   AND JSON_EXTRACT_PATH_TEXT(PROPERTIES,'pn_type') = 'ES_INSTALL_CANDIDATE_CREATED'
                                                                                          THEN 1 ELSE 0 END) AS fpn_action_taken,
-        MAX(CASE WHEN EVENT_NAME = 'install_candidate_opened'                            THEN 1 ELSE 0 END) AS install_candidate_opened
+        MAX(CASE WHEN EVENT_NAME = 'install_candidate_opened'                            THEN 1 ELSE 0 END) AS install_candidate_opened,
+        COUNT(CASE WHEN EVENT_NAME = 'install_task_assigned'                              THEN 1 END)        AS tech_pn_sent
     FROM PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA
     WHERE JSON_EXTRACT_PATH_TEXT(PROPERTIES, 'execution_id') IS NOT NULL
       AND JSON_EXTRACT_PATH_TEXT(PROPERTIES, 'execution_id') != ''
+    GROUP BY 1
+),
+cand_csp AS (
+    SELECT DISTINCT
+        ac.EXECUTION_CANDIDATE_ID AS execution_candidate_id,
+        ca.MOBILE_NUMBER AS csp_mobile
+    FROM all_candidates ac
+    JOIN PROD_DB.CSP_DEMAND_ALLOCATION_SERVICE_CSP_DEMAND_ALLOCATION_SERVICE.CONNECTION_ALLOCATIONS a
+        ON a.CONNECTION_ID = ac.CONNECTION_ID
+        AND a.ALLOCATION_STATE IN ('ASSIGNED','ACCEPTED','ACTIVE','RELEASED')
+    JOIN PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT ca
+        ON ca.csp_id = a.CSP_ID
+),
+cand_creation AS (
+    SELECT execution_candidate_id,
+        MIN(_FIVETRAN_START) AS cand_created_at
+    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES
+    WHERE execution_candidate_id IN (SELECT EXECUTION_CANDIDATE_ID FROM all_candidates)
+    GROUP BY 1
+),
+cand_window AS (
+    SELECT
+        cc.execution_candidate_id,
+        cc.csp_mobile,
+        cr.cand_created_at,
+        LEAD(cr.cand_created_at) OVER (
+            PARTITION BY cc.csp_mobile ORDER BY cr.cand_created_at
+        ) AS next_cand_at
+    FROM cand_csp cc
+    JOIN cand_creation cr ON cc.execution_candidate_id = cr.execution_candidate_id
+),
+wa_raw AS (
+    SELECT
+        event_type,
+        timestamp        AS wa_ts,
+        RIGHT(DEST_ADDR, 10) AS csp_mobile_10
+    FROM GUPSHUP_EVENTS
+    WHERE HSM_TEMPLATE_ID = '8759388'
+        AND event_type IN ('SENT', 'DELIVERED')
+        AND DATE(timestamp) >= CURRENT_DATE - 30
+),
+wa_attributed AS (
+    SELECT
+        cw.execution_candidate_id,
+        wr.event_type
+    FROM wa_raw wr
+    JOIN cand_window cw
+        ON RIGHT(cw.csp_mobile, 10) = wr.csp_mobile_10
+        AND wr.wa_ts >= cw.cand_created_at
+        AND (cw.next_cand_at IS NULL OR wr.wa_ts < cw.next_cand_at)
+),
+wa_cand AS (
+    SELECT
+        execution_candidate_id,
+        MAX(CASE WHEN event_type = 'SENT'      THEN 1 ELSE 0 END) AS wa_sent,
+        MAX(CASE WHEN event_type = 'DELIVERED' THEN 1 ELSE 0 END) AS wa_delivered
+    FROM wa_attributed
     GROUP BY 1
 ),
 candidate_level AS (
@@ -961,13 +1297,18 @@ candidate_level AS (
         CASE WHEN COALESCE(ct.pn_delivered,0)=1 AND COALESCE(ct.pn_clicked,0)=1         THEN 1 ELSE 0 END AS pn_clicked,
         COALESCE(ct.fpn_delivered, 0)                                                                     AS fpn_delivered,
         CASE WHEN COALESCE(ct.fpn_delivered,0)=1 AND COALESCE(ct.fpn_action_taken,0)=1  THEN 1 ELSE 0 END AS fpn_action_taken,
+        COALESCE(wc.wa_sent, 0)                                                                           AS wa_sent,
+        COALESCE(wc.wa_delivered, 0)                                                                      AS wa_delivered,
         COALESCE(ct.install_candidate_opened, 0)                                                          AS drilldown_open,
         CASE WHEN COALESCE(ct.fpn_delivered,0)=1
-              OR  COALESCE(ct.install_candidate_opened,0)=1                              THEN 1 ELSE 0 END AS install_task_open,
+              OR  COALESCE(ct.install_candidate_opened,0)=1
+              OR  COALESCE(wc.wa_delivered,0)=1                                          THEN 1 ELSE 0 END AS install_task_open,
         CASE WHEN ac.CURRENT_STATE = 'DECLINED'       THEN 1 ELSE 0 END AS slot_declined,
         CASE WHEN ac.PROPOSED_SLOT_DATE IS NOT NULL   THEN 1 ELSE 0 END AS slot_proposed,
         CASE WHEN ac.CONFIRMED_SLOT_AT IS NOT NULL    THEN 1 ELSE 0 END AS slot_confirmed,
         CASE WHEN ac.EXECUTOR_ID IS NOT NULL          THEN 1 ELSE 0 END AS tech_assigned,
+        CASE WHEN ac.EXECUTOR_ID IS NOT NULL AND COALESCE(ac.IS_SELF_ASSIGNED, TRUE) = FALSE
+             THEN 1 ELSE 0 END                                         AS tech_assigned_not_self,
         CASE WHEN COALESCE(ac.COMPLETED_STEP,0) >= 1  THEN 1 ELSE 0 END AS step_selfie,
         CASE WHEN COALESCE(ac.COMPLETED_STEP,0) >= 2  THEN 1 ELSE 0 END AS step_aadhaar,
         CASE WHEN ac.SECURITY_FEE_PAID_AT IS NOT NULL THEN 1 ELSE 0 END AS step_fee,
@@ -991,6 +1332,7 @@ candidate_level AS (
               AND ac.CURRENT_STATE = 'CANCELLED_BY_UPSTREAM' THEN 1 ELSE 0 END AS p74_timeout
     FROM all_candidates ac
     LEFT JOIN ct_events ct ON ct.execution_id = ac.EXECUTION_CANDIDATE_ID
+    LEFT JOIN wa_cand   wc ON wc.execution_candidate_id = ac.EXECUTION_CANDIDATE_ID
 ),
 daily_cand AS (
     SELECT
@@ -1001,12 +1343,15 @@ daily_cand AS (
         SUM(pn_clicked)           AS pn_clicked,
         SUM(fpn_delivered)        AS fpn_delivered,
         SUM(fpn_action_taken)     AS fpn_action_taken,
+        SUM(wa_sent)              AS wa_sent,
+        SUM(wa_delivered)         AS wa_delivered,
         SUM(drilldown_open)       AS drilldown_open,
         SUM(install_task_open)    AS install_task_open,
         SUM(slot_declined)        AS slot_declined,
         SUM(slot_proposed)        AS slot_proposed,
         SUM(slot_confirmed)       AS slot_confirmed,
         SUM(tech_assigned)        AS tech_assigned,
+        SUM(tech_assigned_not_self) AS tech_assigned_not_self,
         SUM(step_selfie)          AS step_selfie,
         SUM(step_aadhaar)         AS step_aadhaar,
         SUM(step_fee)             AS step_fee,
@@ -1038,6 +1383,8 @@ rates_joined AS (
         slot_proposed      * 1.0 / NULLIF(install_task_open, 0)  AS slot_proposed_rate,
         slot_confirmed     * 1.0 / NULLIF(slot_proposed, 0)      AS slot_confirmed_rate,
         tech_assigned      * 1.0 / NULLIF(slot_confirmed, 0)     AS tech_assigned_rate,
+        tech_assigned_not_self * 1.0 / NULLIF(slot_confirmed, 0) AS tech_not_self_rate,
+        wa_delivered       * 1.0 / NULLIF(wa_sent, 0)            AS wa_delivery_rate,
         step_selfie        * 1.0 / NULLIF(tech_assigned, 0)      AS arrival_rate,
         step_aadhaar       * 1.0 / NULLIF(step_selfie, 0)        AS aadhaar_rate,
         step_fee           * 1.0 / NULLIF(step_aadhaar, 0)       AS fee_rate,
@@ -1057,27 +1404,29 @@ rates_long AS (
     SELECT 1  AS sort_ord, 'Install PN Click Rate'                          AS metric, booking_date, pn_click_rate             AS rate FROM rates_joined
     UNION ALL SELECT 2,  'FPN Delivery Rate (/Task Created)',               booking_date, fpn_delivery_rate      FROM rates_joined
     UNION ALL SELECT 3,  'FPN Action Taken Rate (/FPN Delivered)',          booking_date, fpn_action_rate        FROM rates_joined
-    UNION ALL SELECT 4,  'Drilldown Open Rate',                             booking_date, drilldown_open_rate    FROM rates_joined
-    UNION ALL SELECT 5,  'Task Open Rate',                                  booking_date, task_open_rate         FROM rates_joined
-    UNION ALL SELECT 6,  'Response Rate ((Proposed+Declined)/Task Open)',   booking_date, response_rate          FROM rates_joined
-    UNION ALL SELECT 7,  'Task Decline Rate',                               booking_date, task_decline_rate      FROM rates_joined
-    UNION ALL SELECT 8,  'P41 Timeout Rate (L2: /Task Created)',            booking_date, p41_rate_l2            FROM rates_joined
-    UNION ALL SELECT 9,  'Slot Proposed Rate',                              booking_date, slot_proposed_rate     FROM rates_joined
-    UNION ALL SELECT 10, 'Slot Confirmed Rate',                             booking_date, slot_confirmed_rate    FROM rates_joined
-    UNION ALL SELECT 11, 'Technician Assignment Rate',                      booking_date, tech_assigned_rate     FROM rates_joined
-    UNION ALL SELECT 12, 'Technician Arrival Rate',                         booking_date, arrival_rate           FROM rates_joined
-    UNION ALL SELECT 13, 'Aadhaar Submitted Rate',                          booking_date, aadhaar_rate           FROM rates_joined
-    UNION ALL SELECT 14, 'SD Fee Submitted Rate',                           booking_date, fee_rate               FROM rates_joined
-    UNION ALL SELECT 15, 'ISP Account Creation Rate',                       booking_date, isp_creation_rate      FROM rates_joined
-    UNION ALL SELECT 16, 'Device ID Entry Rate',                            booking_date, device_id_rate         FROM rates_joined
-    UNION ALL SELECT 17, 'Device Photo Rate',                               booking_date, device_photo_rate      FROM rates_joined
-    UNION ALL SELECT 18, 'Speed Test Rate',                                 booking_date, speed_test_rate        FROM rates_joined
-    UNION ALL SELECT 19, 'Happy Code Received Rate',                        booking_date, happy_code_rate        FROM rates_joined
-    UNION ALL SELECT 20, 'Happy Code Entered Rate',                         booking_date, happy_code_entered_rate FROM rates_joined
-    UNION ALL SELECT 21, 'Install Fail Reported Rate',                      booking_date, install_fail_rate      FROM rates_joined
-    UNION ALL SELECT 22, 'Cancelled by Customer Rate',                      booking_date, cancelled_cx_rate      FROM rates_joined
-    UNION ALL SELECT 23, 'Cancelled by Upstream Rate',                      booking_date, cancelled_upstream_rate FROM rates_joined
-    UNION ALL SELECT 24, 'P74 Timeout Rate (L2: /Slot Proposed)',           booking_date, p74_rate_l2            FROM rates_joined
+    UNION ALL SELECT 4,  'WA Delivery Rate',                                booking_date, wa_delivery_rate       FROM rates_joined
+    UNION ALL SELECT 5,  'Drilldown Open Rate',                             booking_date, drilldown_open_rate    FROM rates_joined
+    UNION ALL SELECT 6,  'Task Open Rate',                                  booking_date, task_open_rate         FROM rates_joined
+    UNION ALL SELECT 7,  'Response Rate ((Proposed+Declined)/Task Open)',   booking_date, response_rate          FROM rates_joined
+    UNION ALL SELECT 8,  'Task Decline Rate',                               booking_date, task_decline_rate      FROM rates_joined
+    UNION ALL SELECT 9,  'P41 Timeout Rate (L2: /Task Created)',            booking_date, p41_rate_l2            FROM rates_joined
+    UNION ALL SELECT 10, 'Slot Proposed Rate',                              booking_date, slot_proposed_rate     FROM rates_joined
+    UNION ALL SELECT 11, 'Slot Confirmed Rate',                             booking_date, slot_confirmed_rate    FROM rates_joined
+    UNION ALL SELECT 12, 'Technician Assignment Rate',                      booking_date, tech_assigned_rate     FROM rates_joined
+    UNION ALL SELECT 13, 'Tech Assigned (not self) Rate',                   booking_date, tech_not_self_rate     FROM rates_joined
+    UNION ALL SELECT 14, 'Technician Arrival Rate',                         booking_date, arrival_rate           FROM rates_joined
+    UNION ALL SELECT 15, 'Aadhaar Submitted Rate',                          booking_date, aadhaar_rate           FROM rates_joined
+    UNION ALL SELECT 16, 'SD Fee Submitted Rate',                           booking_date, fee_rate               FROM rates_joined
+    UNION ALL SELECT 17, 'ISP Account Creation Rate',                       booking_date, isp_creation_rate      FROM rates_joined
+    UNION ALL SELECT 18, 'Device ID Entry Rate',                            booking_date, device_id_rate         FROM rates_joined
+    UNION ALL SELECT 19, 'Device Photo Rate',                               booking_date, device_photo_rate      FROM rates_joined
+    UNION ALL SELECT 20, 'Speed Test Rate',                                 booking_date, speed_test_rate        FROM rates_joined
+    UNION ALL SELECT 21, 'Happy Code Received Rate',                        booking_date, happy_code_rate        FROM rates_joined
+    UNION ALL SELECT 22, 'Happy Code Entered Rate',                         booking_date, happy_code_entered_rate FROM rates_joined
+    UNION ALL SELECT 23, 'Install Fail Reported Rate',                      booking_date, install_fail_rate      FROM rates_joined
+    UNION ALL SELECT 24, 'Cancelled by Customer Rate',                      booking_date, cancelled_cx_rate      FROM rates_joined
+    UNION ALL SELECT 25, 'Cancelled by Upstream Rate',                      booking_date, cancelled_upstream_rate FROM rates_joined
+    UNION ALL SELECT 26, 'P74 Timeout Rate (L2: /Slot Proposed)',           booking_date, p74_rate_l2            FROM rates_joined
 )
 SELECT
     metric                                                                   AS METRIC_NAME,
@@ -1363,27 +1712,116 @@ nbrec_agg AS (
     ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-7 AND p.today, clos_active_pct,NULL)),1) AS cl_p90
   FROM nbrec_daily CROSS JOIN params p
 )
-SELECT metric,
-  "Today", "T-1", "T-2", "T-3", "T-4", "T-5", "T-6", "T-7",
-  "Average", "Median", "P90"
-FROM (
-  SELECT 1 AS sort_ord, 'Commission Claimed Ticket Open Rate' AS metric,
+SELECT 'Commission Claimed Ticket Open Rate' AS metric,
     cm_d0 AS "Today", cm_d1 AS "T-1", cm_d2 AS "T-2", cm_d3 AS "T-3", cm_d4 AS "T-4", cm_d5 AS "T-5", cm_d6 AS "T-6", cm_d7 AS "T-7", cm_avg AS "Average", cm_med AS "Median", cm_p90 AS "P90"
-  FROM commission_agg
+FROM commission_agg
+"""
+
+QUERIES["put_health_nbrec"] = r"""
+WITH params AS (
+  SELECT DATE(CONVERT_TIMEZONE('UTC','Asia/Kolkata',CURRENT_TIMESTAMP())) AS today
+),
+migrated_customers AS (
+  SELECT account_id, mobile
+  FROM T_WG_CUSTOMER
+  WHERE lco_account_id IN (
+    SELECT DISTINCT partner_id
+    FROM PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT
+    WHERE _fivetran_active
+  )
+),
+puts_all AS (
+  SELECT
+    n.EXECUTION_CANDIDATE_ID, n.DEVICE_ID, n.LAST_CONNECTION_ID,
+    n.created_at AS put_created_at, n.state AS nbrec_state, n.reason_code, c.customer_id
+  FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.NBREC_EXECUTION_CANDIDATES n
+  JOIN PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS c
+    ON c.connection_id = n.LAST_CONNECTION_ID AND c._fivetran_active
+  WHERE n._fivetran_active
+    AND n.created_at >= CURRENT_DATE - 90
+    AND n.created_at <= CURRENT_DATE - 21
+),
+puts_with_customer AS (
+  SELECT p.*, mc.mobile
+  FROM puts_all p
+  JOIN migrated_customers mc ON mc.account_id = p.customer_id
+),
+puts_no_recharge_in_21d AS (
+  SELECT pw.*
+  FROM puts_with_customer pw
+  WHERE NOT EXISTS (
+    SELECT 1 FROM T_ROUTER_USER_MAPPING trum
+    WHERE trum.mobile = pw.mobile AND trum.otp = 'DONE'
+      AND trum.store_group_id = 0 AND trum.device_limit = 10
+      AND trum.mobile > '5999999999'
+      AND trum.OTP_ISSUED_TIME > pw.put_created_at
+      AND trum.OTP_ISSUED_TIME <= DATEADD(day,21,pw.put_created_at)
+  )
+),
+first_recharge_post_21d AS (
+  SELECT
+    p.EXECUTION_CANDIDATE_ID, p.DEVICE_ID, p.LAST_CONNECTION_ID,
+    p.put_created_at, p.nbrec_state, p.reason_code, p.mobile,
+    MIN(trum.OTP_ISSUED_TIME) AS recharge_at
+  FROM puts_no_recharge_in_21d p
+  JOIN T_ROUTER_USER_MAPPING trum
+    ON trum.mobile = p.mobile AND trum.otp = 'DONE'
+    AND trum.store_group_id = 0 AND trum.device_limit = 10
+    AND trum.mobile > '5999999999'
+    AND trum.OTP_ISSUED_TIME > DATEADD(day,21,p.put_created_at)
+  GROUP BY p.EXECUTION_CANDIDATE_ID, p.DEVICE_ID, p.LAST_CONNECTION_ID,
+           p.put_created_at, p.nbrec_state, p.reason_code, p.mobile
+),
+acs_transition AS (
+  SELECT device_id, created_at AS acs_transition_at
+  FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.CUSTODY_AUDIT_LOG
+  WHERE to_state = 'DEPLOYED' AND created_at >= CURRENT_DATE - 91
+),
+clos_transition AS (
+  SELECT connection_id, created_at AS clos_transition_at
+  FROM PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTION_EVENT_HISTORY
+  WHERE RESULTING_STATE IN ('ACTIVE','PAUSED') AND created_at >= CURRENT_DATE - 91
+),
+nbrec_daily AS (
+  SELECT
+    DATE(DATEADD(minute,330,pr.recharge_at)) AS d,
+    ROUND(COUNT(CASE WHEN pr.nbrec_state = 'FAILED' THEN 1 END) * 100.0 / NULLIF(COUNT(*),0), 2) AS nbrec_failed_pct,
+    ROUND(COUNT(CASE WHEN at2.acs_transition_at IS NOT NULL THEN 1 END) * 100.0 / NULLIF(COUNT(*),0), 2) AS acs_deployed_pct,
+    ROUND(COUNT(CASE WHEN ct.clos_transition_at IS NOT NULL THEN 1 END) * 100.0 / NULLIF(COUNT(*),0), 2) AS clos_active_pct
+  FROM first_recharge_post_21d pr
+  LEFT JOIN acs_transition at2
+    ON at2.device_id = pr.DEVICE_ID
+    AND ABS(DATEDIFF(day, pr.recharge_at, at2.acs_transition_at)) <= 1
+  LEFT JOIN clos_transition ct
+    ON ct.connection_id = pr.LAST_CONNECTION_ID
+    AND ABS(DATEDIFF(day, pr.recharge_at, ct.clos_transition_at)) <= 1
+  GROUP BY DATE(DATEADD(minute,330,pr.recharge_at))
+),
+nbrec_metrics AS (
+  SELECT d AS dt, 'NBREC - Failed (CX Recharged after 21d of PUT creation)' AS metric, nbrec_failed_pct AS val FROM nbrec_daily WHERE d >= DATEADD('day',-30,CURRENT_DATE())
   UNION ALL
-  SELECT 2, 'NBREC - Failed (CX Recharged after 21 days of PUT creation)',
-    nb_d0, nb_d1, nb_d2, nb_d3, nb_d4, nb_d5, nb_d6, nb_d7, nb_avg, nb_med, nb_p90
-  FROM nbrec_agg
+  SELECT d, 'ACS - Deployed within 1d (CX Recharged after 21d of PUT creation)', acs_deployed_pct FROM nbrec_daily WHERE d >= DATEADD('day',-30,CURRENT_DATE())
   UNION ALL
-  SELECT 3, 'ACS - Deployed within 1d (CX Recharged after 21 days of PUT creation)',
-    acs_d0, acs_d1, acs_d2, acs_d3, acs_d4, acs_d5, acs_d6, acs_d7, acs_avg, acs_med, acs_p90
-  FROM nbrec_agg
-  UNION ALL
-  SELECT 4, 'CLOS - Active within 1d (CX Recharged after 21 days of PUT creation)',
-    cl_d0, cl_d1, cl_d2, cl_d3, cl_d4, cl_d5, cl_d6, cl_d7, cl_avg, cl_med, cl_p90
-  FROM nbrec_agg
-) x
-ORDER BY sort_ord
+  SELECT d, 'CLOS - Active within 1d (CX Recharged after 21d of PUT creation)', clos_active_pct FROM nbrec_daily WHERE d >= DATEADD('day',-30,CURRENT_DATE())
+)
+SELECT metric AS "Metric",
+  MAX(CASE WHEN dt = DATEADD('day',-1,CURRENT_DATE()) THEN val END) AS "T-1",
+  MAX(CASE WHEN dt = DATEADD('day',-2,CURRENT_DATE()) THEN val END) AS "T-2",
+  MAX(CASE WHEN dt = DATEADD('day',-3,CURRENT_DATE()) THEN val END) AS "T-3",
+  MAX(CASE WHEN dt = DATEADD('day',-4,CURRENT_DATE()) THEN val END) AS "T-4",
+  MAX(CASE WHEN dt = DATEADD('day',-5,CURRENT_DATE()) THEN val END) AS "T-5",
+  MAX(CASE WHEN dt = DATEADD('day',-6,CURRENT_DATE()) THEN val END) AS "T-6",
+  MAX(CASE WHEN dt = DATEADD('day',-7,CURRENT_DATE()) THEN val END) AS "T-7",
+  MAX(CASE WHEN dt = DATEADD('day',-8,CURRENT_DATE()) THEN val END) AS "T-8",
+  ROUND(AVG(val), 1) AS "Mean",
+  ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val), 1) AS "Median",
+  ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1) AS "P90"
+FROM nbrec_metrics GROUP BY metric
+ORDER BY CASE metric
+  WHEN 'NBREC - Failed (CX Recharged after 21d of PUT creation)' THEN 1
+  WHEN 'ACS - Deployed within 1d (CX Recharged after 21d of PUT creation)' THEN 2
+  WHEN 'CLOS - Active within 1d (CX Recharged after 21d of PUT creation)' THEN 3
+END
 """
 
 QUERIES["isp_health_ticket_creation_rate"] = r"""
@@ -1826,6 +2264,235 @@ GROUP BY metric
 ORDER BY metric
 """
 
+QUERIES["isp_raw_recharge_overview"] = r"""
+WITH base AS (
+    SELECT
+        DATE(created_at)                          AS dt,
+        COUNT(DISTINCT execution_candidate_id)    AS val
+    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RECHARGE_EXECUTION_CANDIDATES
+    WHERE _fivetran_active = TRUE
+      AND DATE(created_at) >= DATEADD(day, -30, CURRENT_DATE())
+    GROUP BY 1
+),
+obligations AS (
+    SELECT
+        DATE(created_at)              AS dt,
+        reason,
+        COUNT(DISTINCT connection_id) AS val
+    FROM CSP_CUSTOMER_ACCESS_SERVICE_CSP_CUSTOMER_ACCESS_SERVICE.SUPPLY_RECHARGE_OBLIGATIONS
+    WHERE _fivetran_active
+      AND created_at >= DATEADD(day, -30, CURRENT_DATE())
+    GROUP BY 1, 2
+),
+recharges AS (
+    SELECT
+        DATE(UPDATED_AT)                          AS dt,
+        COUNT(DISTINCT EXECUTION_CANDIDATE_ID)    AS total_recharges
+    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RECHARGE_EXECUTION_CANDIDATES
+    WHERE commission_status = 'DISBURSED'
+      AND DATE(UPDATED_AT) >= CURRENT_DATE() - 31
+    GROUP BY 1
+),
+payouts AS (
+    SELECT
+        DATE(c.created_at)                         AS dt,
+        COUNT(DISTINCT a.EXECUTION_CANDIDATE_ID)   AS paid_out,
+        ROUND(SUM(c.amount) / 100.0, 2)            AS paid_amount_inr
+    FROM CSP_COMPENSATION_SERVICE_CSP_COMPENSATION_SERVICE.ENTITLEMENT_LEDGER_ENTRIES b
+    LEFT JOIN PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RECHARGE_EXECUTION_CANDIDATES a
+        ON a.EXECUTION_CANDIDATE_ID = b.RECHARGE_EVENT_REF AND a._fivetran_active
+    LEFT JOIN PROD_DB.CSP_PAYMENT_SETTLEMENT_SERVICE_CSP_PAYMENT_SETTLEMENT_SERVICE.WALLET_LEDGER_ENTRIES c
+        ON c.reference_id = b.recharge_event_ref
+    WHERE DATE(c.created_at) >= CURRENT_DATE() - 31
+      AND c.entry_type = 'BASE_PAYOUT'
+      AND c.reference_id NOT ILIKE '%INSTALL%'
+    GROUP BY 1
+),
+daily AS (
+    SELECT
+        r.dt,
+        r.total_recharges   AS total_val,
+        p.paid_out          AS paid_val,
+        p.paid_amount_inr   AS amount_val
+    FROM recharges r
+    LEFT JOIN payouts p ON p.dt = r.dt
+),
+pivoted AS (
+    SELECT 1 AS sort_order, 'Recharge Tickets Created' AS metric, dt, val        FROM base
+    UNION ALL
+    SELECT 2,               'Obligation: PROACTIVE',              dt, val        FROM obligations WHERE reason = 'PROACTIVE'
+    UNION ALL
+    SELECT 3,               'Obligation: REACTIVE',               dt, val        FROM obligations WHERE reason = 'REACTIVE'
+    UNION ALL
+    SELECT 4,               'Total Recharges (Disbursed)',         dt, total_val  FROM daily
+    UNION ALL
+    SELECT 5,               'CSPs Paid Out',                       dt, paid_val   FROM daily
+    UNION ALL
+    SELECT 6,               'Paid Amount (INR)',                   dt, amount_val FROM daily
+)
+SELECT
+    metric AS "Metric",
+    MAX(CASE WHEN dt = DATEADD(day,-1,CURRENT_DATE()) THEN val END) AS "T-1",
+    MAX(CASE WHEN dt = DATEADD(day,-2,CURRENT_DATE()) THEN val END) AS "T-2",
+    MAX(CASE WHEN dt = DATEADD(day,-3,CURRENT_DATE()) THEN val END) AS "T-3",
+    MAX(CASE WHEN dt = DATEADD(day,-4,CURRENT_DATE()) THEN val END) AS "T-4",
+    MAX(CASE WHEN dt = DATEADD(day,-5,CURRENT_DATE()) THEN val END) AS "T-5",
+    MAX(CASE WHEN dt = DATEADD(day,-6,CURRENT_DATE()) THEN val END) AS "T-6",
+    MAX(CASE WHEN dt = DATEADD(day,-7,CURRENT_DATE()) THEN val END) AS "T-7",
+    MAX(CASE WHEN dt = DATEADD(day,-8,CURRENT_DATE()) THEN val END) AS "T-8",
+    ROUND(AVG(val),1)                                                   AS "Mean",
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1)           AS "Median",
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1)           AS "P90"
+FROM pivoted
+GROUP BY sort_order, metric
+ORDER BY sort_order
+"""
+
+QUERIES["isp_raw_clos_rv"] = r"""
+WITH m1_daily AS (
+  SELECT
+    TO_DATE(c.UPDATED_AT) AS dt,
+    COUNT(DISTINCT c.CONNECTION_ID) AS clos_total,
+    COUNT(DISTINCT rg.CONNECTION_ID) AS rv_total,
+    COUNT(DISTINCT CASE WHEN c.LATEST_RECHARGE_WINDOW_END = rg.WINDOW_END THEN c.CONNECTION_ID END) AS matched
+  FROM PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS c
+  LEFT JOIN PROD_DB.CSP_RV_SERVICE_CSP_RV_SERVICE.RECHARGE_GATES rg
+    ON c.CONNECTION_ID = rg.CONNECTION_ID
+    AND TO_DATE(rg.CREATED_AT) = TO_DATE(c.UPDATED_AT)
+    AND rg._FIVETRAN_ACTIVE = TRUE
+  WHERE c._FIVETRAN_ACTIVE = TRUE
+    AND c.CURRENT_STATE = 'ACTIVE'
+    AND c.LATEST_RECHARGE_WINDOW_END IS NOT NULL
+    AND TO_DATE(c.UPDATED_AT) >= DATEADD(day, -30, TO_DATE(DATEADD(minute, 330, CURRENT_TIMESTAMP())))
+  GROUP BY 1
+)
+SELECT
+  'RG Window End vs CONN Latest Recharge Window (%)' AS "Metric",
+  MAX(CASE WHEN dt = DATEADD(day,-1, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-1",
+  MAX(CASE WHEN dt = DATEADD(day,-2, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-2",
+  MAX(CASE WHEN dt = DATEADD(day,-3, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-3",
+  MAX(CASE WHEN dt = DATEADD(day,-4, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-4",
+  MAX(CASE WHEN dt = DATEADD(day,-5, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-5",
+  MAX(CASE WHEN dt = DATEADD(day,-6, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-6",
+  MAX(CASE WHEN dt = DATEADD(day,-7, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-7",
+  MAX(CASE WHEN dt = DATEADD(day,-8, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-8",
+  ROUND(AVG(100.0*matched/NULLIF(clos_total,0)), 1) AS "Mean",
+  ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY 100.0*matched/NULLIF(clos_total,0)), 1) AS "Median",
+  ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY 100.0*matched/NULLIF(clos_total,0)), 1) AS "P90"
+FROM m1_daily
+UNION ALL
+SELECT 'CLOS Raw',
+  MAX(CASE WHEN dt = DATEADD(day,-1, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN clos_total END),
+  MAX(CASE WHEN dt = DATEADD(day,-2, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN clos_total END),
+  MAX(CASE WHEN dt = DATEADD(day,-3, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN clos_total END),
+  MAX(CASE WHEN dt = DATEADD(day,-4, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN clos_total END),
+  MAX(CASE WHEN dt = DATEADD(day,-5, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN clos_total END),
+  MAX(CASE WHEN dt = DATEADD(day,-6, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN clos_total END),
+  MAX(CASE WHEN dt = DATEADD(day,-7, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN clos_total END),
+  MAX(CASE WHEN dt = DATEADD(day,-8, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN clos_total END),
+  ROUND(AVG(clos_total)),
+  PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY clos_total),
+  PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY clos_total)
+FROM m1_daily
+UNION ALL
+SELECT 'RV Gate Raw',
+  MAX(CASE WHEN dt = DATEADD(day,-1, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN rv_total END),
+  MAX(CASE WHEN dt = DATEADD(day,-2, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN rv_total END),
+  MAX(CASE WHEN dt = DATEADD(day,-3, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN rv_total END),
+  MAX(CASE WHEN dt = DATEADD(day,-4, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN rv_total END),
+  MAX(CASE WHEN dt = DATEADD(day,-5, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN rv_total END),
+  MAX(CASE WHEN dt = DATEADD(day,-6, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN rv_total END),
+  MAX(CASE WHEN dt = DATEADD(day,-7, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN rv_total END),
+  MAX(CASE WHEN dt = DATEADD(day,-8, TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP()))) THEN rv_total END),
+  ROUND(AVG(rv_total)),
+  PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY rv_total),
+  PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY rv_total)
+FROM m1_daily
+"""
+
+QUERIES["isp_raw_trum_caeo"] = r"""
+WITH today_ist AS (SELECT TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP())) AS dt),
+active_connections AS (
+  SELECT DISTINCT CUSTOMER_ID
+  FROM PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS
+  WHERE _FIVETRAN_ACTIVE = TRUE
+),
+trum_deduped AS (
+  SELECT t.ROUTER_NAS_ID,
+    TO_DATE(DATEADD(minute,330,t.CREATED_ON)) AS dt,
+    MAX(t.OTP_EXPIRY_TIME) AS max_expiry
+  FROM PROD_DB.PUBLIC.T_ROUTER_USER_MAPPING t
+  JOIN PROD_DB.PUBLIC.T_WG_CUSTOMER twg2 ON t.ROUTER_NAS_ID=twg2.NASID AND twg2._FIVETRAN_DELETED=FALSE
+  JOIN active_connections ac ON twg2.ACCOUNT_ID::VARCHAR=ac.CUSTOMER_ID
+  WHERE t.DEVICE_LIMIT='10' AND t.OTP='DONE' AND t.MOBILE>'5999999999'
+    AND TO_DATE(DATEADD(minute,330,t.CREATED_ON)) >= DATEADD(day,-30,(SELECT dt FROM today_ist))
+    AND TO_DATE(DATEADD(minute,330,t.CREATED_ON)) < (SELECT dt FROM today_ist)
+  GROUP BY 1,2
+),
+caeo_daily AS (
+  SELECT cas.CUSTOMER_ID,
+    TO_DATE(CONVERT_TIMEZONE('Asia/Kolkata',cas.UPDATED_AT)) AS caeo_ist_dt,
+    MAX(cas.ENTITLEMENT_END) AS max_entitlement_end
+  FROM PROD_DB.CSP_CUSTOMER_ACCESS_SERVICE_CSP_CUSTOMER_ACCESS_SERVICE.CUSTOMER_ACCESS_STATES cas
+  GROUP BY 1,2
+),
+m2_daily AS (
+  SELECT td.dt,
+    COUNT(DISTINCT td.ROUTER_NAS_ID) AS trum_total,
+    COUNT(DISTINCT cd.CUSTOMER_ID) AS caeo_total,
+    COUNT(DISTINCT CASE
+      WHEN DATE_TRUNC('second',CONVERT_TIMEZONE('UTC','Asia/Kolkata',td.max_expiry))
+         = DATE_TRUNC('second',CONVERT_TIMEZONE('UTC','Asia/Kolkata',cd.max_entitlement_end::TIMESTAMP_NTZ))
+      THEN td.ROUTER_NAS_ID END) AS matched
+  FROM trum_deduped td
+  LEFT JOIN PROD_DB.PUBLIC.T_WG_CUSTOMER twg ON td.ROUTER_NAS_ID=twg.NASID AND twg._FIVETRAN_DELETED=FALSE
+  LEFT JOIN caeo_daily cd ON twg.ACCOUNT_ID::VARCHAR=cd.CUSTOMER_ID AND cd.caeo_ist_dt=td.dt
+  GROUP BY 1
+)
+SELECT 'TRUM Expiry vs CAEO Max Entitlement (%)' AS "Metric",
+  MAX(CASE WHEN dt=DATEADD(day,-1,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-1",
+  MAX(CASE WHEN dt=DATEADD(day,-2,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-2",
+  MAX(CASE WHEN dt=DATEADD(day,-3,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-3",
+  MAX(CASE WHEN dt=DATEADD(day,-4,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-4",
+  MAX(CASE WHEN dt=DATEADD(day,-5,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-5",
+  MAX(CASE WHEN dt=DATEADD(day,-6,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-6",
+  MAX(CASE WHEN dt=DATEADD(day,-7,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-7",
+  MAX(CASE WHEN dt=DATEADD(day,-8,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-8",
+  ROUND(AVG(100.0*matched/NULLIF(trum_total,0)),1) AS "Mean",
+  ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY 100.0*matched/NULLIF(trum_total,0)),1) AS "Median",
+  ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY 100.0*matched/NULLIF(trum_total,0)),1) AS "P90"
+FROM m2_daily
+UNION ALL
+SELECT 'TRUM Raw',
+  MAX(CASE WHEN dt=DATEADD(day,-1,(SELECT dt FROM today_ist)) THEN trum_total END),
+  MAX(CASE WHEN dt=DATEADD(day,-2,(SELECT dt FROM today_ist)) THEN trum_total END),
+  MAX(CASE WHEN dt=DATEADD(day,-3,(SELECT dt FROM today_ist)) THEN trum_total END),
+  MAX(CASE WHEN dt=DATEADD(day,-4,(SELECT dt FROM today_ist)) THEN trum_total END),
+  MAX(CASE WHEN dt=DATEADD(day,-5,(SELECT dt FROM today_ist)) THEN trum_total END),
+  MAX(CASE WHEN dt=DATEADD(day,-6,(SELECT dt FROM today_ist)) THEN trum_total END),
+  MAX(CASE WHEN dt=DATEADD(day,-7,(SELECT dt FROM today_ist)) THEN trum_total END),
+  MAX(CASE WHEN dt=DATEADD(day,-8,(SELECT dt FROM today_ist)) THEN trum_total END),
+  ROUND(AVG(trum_total),1),
+  ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY trum_total::FLOAT),1),
+  ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY trum_total::FLOAT),1)
+FROM m2_daily
+UNION ALL
+SELECT 'CAEO Raw',
+  MAX(CASE WHEN dt=DATEADD(day,-1,(SELECT dt FROM today_ist)) THEN caeo_total END),
+  MAX(CASE WHEN dt=DATEADD(day,-2,(SELECT dt FROM today_ist)) THEN caeo_total END),
+  MAX(CASE WHEN dt=DATEADD(day,-3,(SELECT dt FROM today_ist)) THEN caeo_total END),
+  MAX(CASE WHEN dt=DATEADD(day,-4,(SELECT dt FROM today_ist)) THEN caeo_total END),
+  MAX(CASE WHEN dt=DATEADD(day,-5,(SELECT dt FROM today_ist)) THEN caeo_total END),
+  MAX(CASE WHEN dt=DATEADD(day,-6,(SELECT dt FROM today_ist)) THEN caeo_total END),
+  MAX(CASE WHEN dt=DATEADD(day,-7,(SELECT dt FROM today_ist)) THEN caeo_total END),
+  MAX(CASE WHEN dt=DATEADD(day,-8,(SELECT dt FROM today_ist)) THEN caeo_total END),
+  ROUND(AVG(caeo_total),1),
+  ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY caeo_total::FLOAT),1),
+  ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY caeo_total::FLOAT),1)
+FROM m2_daily
+"""
+
+
 QUERIES["isp_health_payout_rate"] = r"""
 WITH recharges AS (
     SELECT
@@ -1871,6 +2538,97 @@ SELECT
     ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "Median",
     ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "P90"
 FROM daily
+"""
+
+QUERIES["isp_health_clos_rv"] = r"""
+WITH m1_daily AS (
+  SELECT
+    TO_DATE(c.UPDATED_AT) AS dt,
+    COUNT(DISTINCT c.CONNECTION_ID) AS clos_total,
+    COUNT(DISTINCT rg.CONNECTION_ID) AS rv_total,
+    COUNT(DISTINCT CASE WHEN c.LATEST_RECHARGE_WINDOW_END = rg.WINDOW_END THEN c.CONNECTION_ID END) AS matched
+  FROM PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS c
+  LEFT JOIN PROD_DB.CSP_RV_SERVICE_CSP_RV_SERVICE.RECHARGE_GATES rg
+    ON c.CONNECTION_ID = rg.CONNECTION_ID
+    AND TO_DATE(rg.CREATED_AT) = TO_DATE(c.UPDATED_AT)
+    AND rg._FIVETRAN_ACTIVE = TRUE
+  WHERE c._FIVETRAN_ACTIVE = TRUE
+    AND c.CURRENT_STATE = 'ACTIVE'
+    AND c.LATEST_RECHARGE_WINDOW_END IS NOT NULL
+    AND TO_DATE(c.UPDATED_AT) >= DATEADD(day, -30, TO_DATE(DATEADD(minute, 330, CURRENT_TIMESTAMP())))
+  GROUP BY 1
+),
+params AS (
+  SELECT TO_DATE(DATEADD(minute, 330, CURRENT_TIMESTAMP())) AS today
+)
+SELECT
+  'RG Window End vs CONN Latest Recharge Window (%)' AS metric,
+  MAX(CASE WHEN dt = p.today   THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "Today",
+  MAX(CASE WHEN dt = p.today-1 THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-1",
+  MAX(CASE WHEN dt = p.today-2 THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-2",
+  MAX(CASE WHEN dt = p.today-3 THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-3",
+  MAX(CASE WHEN dt = p.today-4 THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-4",
+  MAX(CASE WHEN dt = p.today-5 THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-5",
+  MAX(CASE WHEN dt = p.today-6 THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-6",
+  MAX(CASE WHEN dt = p.today-7 THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-7",
+  ROUND(AVG(100.0*matched/NULLIF(clos_total,0)), 1) AS "Average",
+  ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY 100.0*matched/NULLIF(clos_total,0)), 1) AS "Median",
+  ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY 100.0*matched/NULLIF(clos_total,0)), 1) AS "P90"
+FROM m1_daily CROSS JOIN params p
+"""
+
+QUERIES["isp_health_trum_caeo"] = r"""
+WITH today_ist AS (SELECT TO_DATE(DATEADD(minute,330,CURRENT_TIMESTAMP())) AS dt),
+active_connections AS (
+  SELECT DISTINCT CUSTOMER_ID
+  FROM PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS
+  WHERE _FIVETRAN_ACTIVE = TRUE
+),
+trum_deduped AS (
+  SELECT t.ROUTER_NAS_ID,
+    TO_DATE(DATEADD(minute,330,t.CREATED_ON)) AS dt,
+    MAX(t.OTP_EXPIRY_TIME) AS max_expiry
+  FROM PROD_DB.PUBLIC.T_ROUTER_USER_MAPPING t
+  JOIN PROD_DB.PUBLIC.T_WG_CUSTOMER twg2 ON t.ROUTER_NAS_ID=twg2.NASID AND twg2._FIVETRAN_DELETED=FALSE
+  JOIN active_connections ac ON twg2.ACCOUNT_ID::VARCHAR=ac.CUSTOMER_ID
+  WHERE t.DEVICE_LIMIT='10' AND t.OTP='DONE' AND t.MOBILE>'5999999999'
+    AND TO_DATE(DATEADD(minute,330,t.CREATED_ON)) >= DATEADD(day,-30,(SELECT dt FROM today_ist))
+    AND TO_DATE(DATEADD(minute,330,t.CREATED_ON)) < (SELECT dt FROM today_ist)
+  GROUP BY 1,2
+),
+caeo_daily AS (
+  SELECT cas.CUSTOMER_ID,
+    TO_DATE(CONVERT_TIMEZONE('Asia/Kolkata',cas.UPDATED_AT)) AS caeo_ist_dt,
+    MAX(cas.ENTITLEMENT_END) AS max_entitlement_end
+  FROM PROD_DB.CSP_CUSTOMER_ACCESS_SERVICE_CSP_CUSTOMER_ACCESS_SERVICE.CUSTOMER_ACCESS_STATES cas
+  GROUP BY 1,2
+),
+m2_daily AS (
+  SELECT td.dt,
+    COUNT(DISTINCT td.ROUTER_NAS_ID) AS trum_total,
+    COUNT(DISTINCT cd.CUSTOMER_ID) AS caeo_total,
+    COUNT(DISTINCT CASE
+      WHEN DATE_TRUNC('second',CONVERT_TIMEZONE('UTC','Asia/Kolkata',td.max_expiry))
+         = DATE_TRUNC('second',CONVERT_TIMEZONE('UTC','Asia/Kolkata',cd.max_entitlement_end::TIMESTAMP_NTZ))
+      THEN td.ROUTER_NAS_ID END) AS matched
+  FROM trum_deduped td
+  LEFT JOIN PROD_DB.PUBLIC.T_WG_CUSTOMER twg ON td.ROUTER_NAS_ID=twg.NASID AND twg._FIVETRAN_DELETED=FALSE
+  LEFT JOIN caeo_daily cd ON twg.ACCOUNT_ID::VARCHAR=cd.CUSTOMER_ID AND cd.caeo_ist_dt=td.dt
+  GROUP BY 1
+)
+SELECT 'TRUM Expiry vs CAEO Max Entitlement (%)' AS metric,
+  MAX(CASE WHEN dt=(SELECT dt FROM today_ist)   THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "Today",
+  MAX(CASE WHEN dt=DATEADD(day,-1,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-1",
+  MAX(CASE WHEN dt=DATEADD(day,-2,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-2",
+  MAX(CASE WHEN dt=DATEADD(day,-3,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-3",
+  MAX(CASE WHEN dt=DATEADD(day,-4,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-4",
+  MAX(CASE WHEN dt=DATEADD(day,-5,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-5",
+  MAX(CASE WHEN dt=DATEADD(day,-6,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-6",
+  MAX(CASE WHEN dt=DATEADD(day,-7,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-7",
+  ROUND(AVG(100.0*matched/NULLIF(trum_total,0)),1) AS "Average",
+  ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY 100.0*matched/NULLIF(trum_total,0)),1) AS "Median",
+  ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY 100.0*matched/NULLIF(trum_total,0)),1) AS "P90"
+FROM m2_daily
 """
 
 QUERIES["isp_recharge_efficiency"] = r"""
@@ -2494,11 +3252,11 @@ SELECT * FROM (
     FROM with_expected WHERE expected_sla_ist IS NOT NULL
   ),
   daily AS (
-    SELECT dt, category, sla_rule, ROUND(100.0 * SUM(is_correct) / NULLIF(COUNT(*), 0), 1) AS correct_pct
-    FROM with_deviation GROUP BY dt, category, sla_rule
+    SELECT dt, SUM(is_correct) AS correct_cnt, COUNT(*) AS total_cnt
+    FROM with_deviation GROUP BY dt
   ),
-  daily_avg AS (
-    SELECT dt, ROUND(AVG(correct_pct), 1) AS val FROM daily GROUP BY dt
+  daily_weighted AS (
+    SELECT dt, ROUND(100.0 * correct_cnt / NULLIF(total_cnt, 0), 1) AS val FROM daily
   )
   SELECT 'TAT Calculation Accuracy' AS metric,
     MAX(CASE WHEN dt = DATEADD('day', -1, CURRENT_DATE()) THEN val END) AS "T-1",
@@ -2512,7 +3270,7 @@ SELECT * FROM (
     ROUND(AVG(val), 1) AS "Mean",
     ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val), 1) AS "Median",
     ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1) AS "P90"
-  FROM daily_avg
+  FROM daily_weighted
 )
 UNION ALL
 SELECT * FROM (
