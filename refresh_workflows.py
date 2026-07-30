@@ -22,7 +22,7 @@ def mb_native(sql):
         data=data,
         headers={"x-api-key": API_KEY, "Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=180) as resp:
+    with urllib.request.urlopen(req, timeout=600) as resp:
         result = json.loads(resp.read())
     cols = [c["name"] for c in result["data"]["cols"]]
     return [dict(zip(cols, row)) for row in result["data"]["rows"]]
