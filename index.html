@@ -575,6 +575,17 @@ function fmt(val) {
   return n.toLocaleString('en-IN', { maximumFractionDigits: 1 });
 }
 
+const METRIC_RENAME = {
+  'BASE_PAYOUT': 'Base Payout',
+  'BONUS_CREDIT': 'Bonus Payout',
+  'CARRY_FEE': 'Device Carry Fee Charges',
+  'INTERVENTION_CREDIT': 'Adhoc Payments by Finance',
+  'RECOVERY_RETURN': 'Netbox Recovery Payout',
+  'LIABILITY_AUTO_ADJUST': 'CSP Liability Adjustments',
+  'NETBOX_SECURITY_DEDUCTION': 'Netbox Security Deducted (from wallet to security deposit)',
+  'TAX_WITHHELD': 'TDS',
+  'WITHDRAWAL': 'CSP Wallet Withdrawals',
+};
 function buildTableHtml(rows, cols, pct, clickable) {
   let html = '<div class="table-wrap"><table><thead><tr>';
   html += '<th>Metric</th>';
@@ -585,7 +596,8 @@ function buildTableHtml(rows, cols, pct, clickable) {
   html += '</tr></thead><tbody>';
 
   for (const row of rows) {
-    const name = row.METRIC_NAME || row.metric_name || row.metric || row.METRIC || row.Metric || row.entry_type || row.ENTRY_TYPE || '';
+    const nameRaw = row.METRIC_NAME || row.metric_name || row.metric || row.METRIC || row.Metric || row.entry_type || row.ENTRY_TYPE || '';
+    const name = METRIC_RENAME[nameRaw] || nameRaw;
     const isSection = name.startsWith('---');
     if (isSection) {
       html += '<tr class="row-section"><td colspan="' + (cols.length + 1) + '">' + name.replace(/^-+\s*/, '') + '</td></tr>';
