@@ -332,10 +332,22 @@ function loadMetric(key, wfName, type) {
 
   if (key === 'pickup_tickets_health') {
     let combined = rows ? rows.slice() : [];
+    // Prepend PUT Creation Rate % from put_raw_creation_rate (last metric row)
+    const crData = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['put_raw_creation_rate'] : null;
+    if (crData) {
+      const crRow = crData.find(r => (r['Metric'] || '').indexOf('PUT Creation Rate') !== -1);
+      if (crRow) combined = [crRow].concat(combined);
+    }
     ['put_health_nbrec'].forEach(k => {
       const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[k] : null;
       if (d) combined = combined.concat(d);
     });
+    // Append % Closed within 2h from put_raw_closed_within_1h
+    const clData = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['put_raw_closed_within_1h'] : null;
+    if (clData) {
+      const clRow = clData.find(r => (r['Metric'] || '').indexOf('% Closed within 2h') !== -1);
+      if (clRow) combined = combined.concat([clRow]);
+    }
     html = buildTableHtml(combined, cols, isRates);
   }
 

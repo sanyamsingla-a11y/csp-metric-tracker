@@ -4333,76 +4333,6 @@ pivot_6 AS (
       ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1) AS "P90"
     FROM q6_metrics GROUP BY metric
 ),
-q7_migrated AS (
-    SELECT account_id FROM T_WG_CUSTOMER
-    WHERE lco_account_id IN (
-        SELECT DISTINCT partner_id
-        FROM PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT
-        WHERE _fivetran_active
-    )
-),
-q7_recharges AS (
-    SELECT tg.account_id, trum.created_on AS recharge_time
-    FROM T_ROUTER_USER_MAPPING trum
-    JOIN T_WG_CUSTOMER tg ON tg.mobile = trum.mobile
-    WHERE trum.otp = 'DONE' AND trum.store_group_id = 0 AND trum.device_limit = 10
-        AND trum.mobile > '5999999999' AND trum.created_on >= CURRENT_DATE - 31
-),
-q7_tickets AS (
-    SELECT exec.EXECUTION_CANDIDATE_ID, c.customer_id AS account_id,
-        exec.created_at AS ticket_created_at, exec.updated_at AS ticket_updated_at,
-        exec.state, exec.reason_code
-    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.NBREC_EXECUTION_CANDIDATES exec
-    JOIN PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS c
-        ON c.connection_id = exec.last_connection_id AND c._fivetran_active
-    JOIN q7_migrated mc ON mc.account_id = c.customer_id
-    WHERE exec._fivetran_active AND exec.created_at >= CURRENT_DATE - 31
-),
-q7_first_recharge AS (
-    SELECT pt.EXECUTION_CANDIDATE_ID, pt.account_id,
-        DATE(pt.ticket_created_at + INTERVAL '330 minutes') AS ticket_dt,
-        pt.ticket_created_at,
-        MIN(r.recharge_time) AS first_recharge_after_ticket,
-        pt.state, pt.reason_code, pt.ticket_updated_at
-    FROM q7_tickets pt
-    JOIN q7_recharges r ON r.account_id = pt.account_id AND r.recharge_time > pt.ticket_created_at
-    GROUP BY 1,2,3,4,6,7,8
-),
-q7_flagged AS (
-    SELECT *,
-        CASE WHEN state = 'CANCELLED' AND reason_code = 'DEVICE_RESCUED' THEN 1 ELSE 0 END AS rescued,
-        CASE WHEN state = 'CANCELLED' AND reason_code = 'DEVICE_RESCUED'
-                  AND ticket_updated_at >= first_recharge_after_ticket
-                  AND ticket_updated_at <= DATEADD(hour, 1, first_recharge_after_ticket)
-             THEN 1 ELSE 0 END AS rescued_within_1h
-    FROM q7_first_recharge
-),
-q7_daily AS (
-    SELECT ticket_dt AS dt,
-        SUM(rescued)           AS put_closed,
-        SUM(rescued_within_1h) AS closed_within_1h
-    FROM q7_flagged GROUP BY 1
-),
-q7_metrics AS (
-    SELECT dt, 'PUT Closed Within 1h %' AS metric,
-        ROUND(closed_within_1h * 100.0 / NULLIF(put_closed, 0), 1) AS val
-    FROM q7_daily WHERE dt >= DATEADD('day', -30, CURRENT_DATE())
-),
-pivot_7 AS (
-    SELECT metric AS "Metric",
-      MAX(CASE WHEN dt = DATEADD('day',-1,CURRENT_DATE()) THEN val END) AS "T-1",
-      MAX(CASE WHEN dt = DATEADD('day',-2,CURRENT_DATE()) THEN val END) AS "T-2",
-      MAX(CASE WHEN dt = DATEADD('day',-3,CURRENT_DATE()) THEN val END) AS "T-3",
-      MAX(CASE WHEN dt = DATEADD('day',-4,CURRENT_DATE()) THEN val END) AS "T-4",
-      MAX(CASE WHEN dt = DATEADD('day',-5,CURRENT_DATE()) THEN val END) AS "T-5",
-      MAX(CASE WHEN dt = DATEADD('day',-6,CURRENT_DATE()) THEN val END) AS "T-6",
-      MAX(CASE WHEN dt = DATEADD('day',-7,CURRENT_DATE()) THEN val END) AS "T-7",
-      MAX(CASE WHEN dt = DATEADD('day',-8,CURRENT_DATE()) THEN val END) AS "T-8",
-      ROUND(AVG(val), 1) AS "Mean",
-      ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val), 1) AS "Median",
-      ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1) AS "P90"
-    FROM q7_metrics GROUP BY metric
-),
 q8_migrated AS (
     SELECT account_id FROM T_WG_CUSTOMER
     WHERE lco_account_id IN (
@@ -4457,78 +4387,6 @@ pivot_8 AS (
       ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val), 1) AS "Median",
       ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1) AS "P90"
     FROM q8_metrics GROUP BY metric
-),
-q9_m_c AS (
-    SELECT DISTINCT CUSTOMER_ID
-    FROM PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS
-    WHERE _FIVETRAN_ACTIVE
-),
-q9_tickets AS (
-    SELECT
-        DATE(t.CREATED_TIME + INTERVAL '330 minutes') AS dt,
-        t.CREATED_TIME + INTERVAL '330 minutes' AS ticket_created_at,
-        t.CUSTOMER_ACCOUNT_ID
-    FROM PROD_DB.DYNAMODB_READ.TICKETS t
-    JOIN q9_m_c ON q9_m_c.CUSTOMER_ID = t.CUSTOMER_ACCOUNT_ID
-    WHERE DATE(t.CREATED_TIME + INTERVAL '330 minutes')
-          BETWEEN '2026-07-05' AND CURRENT_DATE() - 1
-      AND t.TICKET_TYPE = 'ROUTER_PICKUP'
-    QUALIFY ROW_NUMBER() OVER (
-        PARTITION BY t.CUSTOMER_ACCOUNT_ID
-        ORDER BY t.CREATED_TIME DESC
-    ) = 1
-),
-q9_nbrec AS (
-    SELECT
-        c.CUSTOMER_ID,
-        nec.CREATED_AT + INTERVAL '330 minutes' AS nbrec_created_at
-    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.NBREC_EXECUTION_CANDIDATES nec
-    JOIN PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS c
-      ON nec.LAST_CONNECTION_ID = c.CONNECTION_ID
-     AND c._FIVETRAN_ACTIVE
-    WHERE nec._FIVETRAN_ACTIVE
-),
-q9_matched AS (
-    SELECT
-        t.dt,
-        t.CUSTOMER_ACCOUNT_ID,
-        t.ticket_created_at,
-        n.nbrec_created_at
-    FROM q9_tickets t
-    LEFT JOIN q9_nbrec n
-      ON t.CUSTOMER_ACCOUNT_ID = n.CUSTOMER_ID
-     AND ABS(DATEDIFF('hour', t.ticket_created_at, n.nbrec_created_at)) <= 6
-    QUALIFY ROW_NUMBER() OVER (
-        PARTITION BY t.CUSTOMER_ACCOUNT_ID, t.ticket_created_at
-        ORDER BY ABS(DATEDIFF('second', t.ticket_created_at, n.nbrec_created_at))
-    ) = 1
-),
-q9_daily AS (
-    SELECT dt,
-        COUNT(*) AS total_tickets,
-        COUNT(nbrec_created_at) AS present_in_nbrec_6h
-    FROM q9_matched
-    GROUP BY 1
-),
-q9_metrics AS (
-    SELECT dt, 'PUT Creation Rate %' AS metric,
-        ROUND(100.0 * present_in_nbrec_6h / NULLIF(total_tickets, 0), 2) AS val
-    FROM q9_daily
-),
-pivot_9 AS (
-    SELECT metric AS "Metric",
-      MAX(CASE WHEN dt = DATEADD('day',-1,CURRENT_DATE()) THEN val END) AS "T-1",
-      MAX(CASE WHEN dt = DATEADD('day',-2,CURRENT_DATE()) THEN val END) AS "T-2",
-      MAX(CASE WHEN dt = DATEADD('day',-3,CURRENT_DATE()) THEN val END) AS "T-3",
-      MAX(CASE WHEN dt = DATEADD('day',-4,CURRENT_DATE()) THEN val END) AS "T-4",
-      MAX(CASE WHEN dt = DATEADD('day',-5,CURRENT_DATE()) THEN val END) AS "T-5",
-      MAX(CASE WHEN dt = DATEADD('day',-6,CURRENT_DATE()) THEN val END) AS "T-6",
-      MAX(CASE WHEN dt = DATEADD('day',-7,CURRENT_DATE()) THEN val END) AS "T-7",
-      MAX(CASE WHEN dt = DATEADD('day',-8,CURRENT_DATE()) THEN val END) AS "T-8",
-      ROUND(AVG(val), 1) AS "Mean",
-      ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val), 1) AS "Median",
-      ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1) AS "P90"
-    FROM q9_metrics GROUP BY metric
 )
 
 SELECT 'PUT Creation State Alignment'                AS "Metric",
@@ -4561,23 +4419,11 @@ SELECT 'Device Lost -> Recoverable Due',
     ROUND(AVG("Mean"),1), ROUND(AVG("Median"),1), ROUND(AVG("P90"),1)
 FROM pivot_6
 UNION ALL
-SELECT 'Recharge Done -> PUT Closed Within 1h',
-    ROUND(AVG("T-1"),1), ROUND(AVG("T-2"),1), ROUND(AVG("T-3"),1), ROUND(AVG("T-4"),1),
-    ROUND(AVG("T-5"),1), ROUND(AVG("T-6"),1), ROUND(AVG("T-7"),1), ROUND(AVG("T-8"),1),
-    ROUND(AVG("Mean"),1), ROUND(AVG("Median"),1), ROUND(AVG("P90"),1)
-FROM pivot_7
-UNION ALL
 SELECT 'Security Deposit -> NBREC Match Rate',
     ROUND(AVG("T-1"),1), ROUND(AVG("T-2"),1), ROUND(AVG("T-3"),1), ROUND(AVG("T-4"),1),
     ROUND(AVG("T-5"),1), ROUND(AVG("T-6"),1), ROUND(AVG("T-7"),1), ROUND(AVG("T-8"),1),
     ROUND(AVG("Mean"),1), ROUND(AVG("Median"),1), ROUND(AVG("P90"),1)
 FROM pivot_8
-UNION ALL
-SELECT 'PUT Creation Rate',
-    ROUND(AVG("T-1"),1), ROUND(AVG("T-2"),1), ROUND(AVG("T-3"),1), ROUND(AVG("T-4"),1),
-    ROUND(AVG("T-5"),1), ROUND(AVG("T-6"),1), ROUND(AVG("T-7"),1), ROUND(AVG("T-8"),1),
-    ROUND(AVG("Mean"),1), ROUND(AVG("Median"),1), ROUND(AVG("P90"),1)
-FROM pivot_9
 """
 
 QUERIES["put_raw_creation_alignment"] = r"""
@@ -4827,55 +4673,66 @@ QUERIES["put_raw_closed_within_1h"] = r"""
 WITH migrated_customers AS (
     SELECT account_id FROM T_WG_CUSTOMER
     WHERE lco_account_id IN (
-        SELECT DISTINCT partner_id
-        FROM PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT WHERE _FIVETRAN_ACTIVE
+        SELECT DISTINCT partner_id FROM PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT WHERE _FIVETRAN_ACTIVE
     )
 ),
-recharges AS (
-    SELECT tg.account_id, trum.created_on AS recharge_time
-    FROM T_ROUTER_USER_MAPPING trum
-    JOIN T_WG_CUSTOMER tg ON tg.mobile = trum.mobile
-    WHERE trum.otp = 'DONE' AND trum.store_group_id = 0 AND trum.device_limit = 10
-        AND trum.mobile > '5999999999' AND trum.created_on >= CURRENT_DATE - 31
-),
 pickup_tickets AS (
-    SELECT exec.EXECUTION_CANDIDATE_ID, c.customer_id AS account_id,
-        exec.created_at AS ticket_created_at, exec.updated_at AS ticket_updated_at, exec.state, exec.reason_code
+    SELECT
+        exec.EXECUTION_CANDIDATE_ID,
+        c.customer_id AS account_id,
+        c.connection_id,
+        exec.created_at                         AS ticket_created_at_ist,
+        DATEADD(minute, 330, exec.updated_at)   AS ticket_updated_at_ist,
+        exec.state,
+        exec.reason_code
     FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.NBREC_EXECUTION_CANDIDATES exec
     JOIN PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS c
         ON c.connection_id = exec.last_connection_id AND c._FIVETRAN_ACTIVE
     JOIN migrated_customers mc ON mc.account_id = c.customer_id
-    WHERE exec._FIVETRAN_ACTIVE AND exec.created_at >= CURRENT_DATE - 31
+    WHERE exec._FIVETRAN_ACTIVE AND exec.created_at >= CURRENT_DATE - 55
 ),
 first_recharge_after AS (
-    SELECT pt.EXECUTION_CANDIDATE_ID, pt.account_id,
-        DATE(pt.ticket_created_at + INTERVAL '330 minutes') AS dt,
-        pt.ticket_created_at, MIN(r.recharge_time) AS first_recharge_after_ticket,
-        pt.state, pt.reason_code, pt.ticket_updated_at
+    SELECT
+        pt.EXECUTION_CANDIDATE_ID, pt.account_id, pt.connection_id,
+        pt.ticket_created_at_ist, pt.ticket_updated_at_ist, pt.state, pt.reason_code,
+        DATEADD(minute, 330, trum.created_on) AS first_recharge_ist,
+        trum.ROUTER_NAS_ID
     FROM pickup_tickets pt
-    JOIN recharges r ON r.account_id = pt.account_id AND r.recharge_time > pt.ticket_created_at
-    GROUP BY 1,2,3,4,6,7,8
+    JOIN T_WG_CUSTOMER tg ON tg.account_id = pt.account_id
+    JOIN T_ROUTER_USER_MAPPING trum
+        ON trum.router_nas_id = tg.nasid
+       AND trum.otp = 'DONE'
+       AND trum.store_group_id = 0
+       AND trum.device_limit = 10
+       AND trum.mobile > '5999999999'
+       AND DATEADD(minute, 330, trum.created_on) > pt.ticket_created_at_ist
+       AND trum.created_on >= CURRENT_DATE - 31
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY pt.EXECUTION_CANDIDATE_ID ORDER BY trum.created_on ASC) = 1
 ),
-flagged AS (
-    SELECT *,
-        CASE WHEN state = 'CANCELLED' AND reason_code = 'DEVICE_RESCUED' THEN 1 ELSE 0 END AS rescued,
-        CASE WHEN state = 'CANCELLED' AND reason_code = 'DEVICE_RESCUED'
-                  AND ticket_updated_at >= first_recharge_after_ticket
-                  AND ticket_updated_at <= DATEADD(hour, 2, first_recharge_after_ticket)
-             THEN 1 ELSE 0 END AS rescued_within_2h
+daily AS (
+    SELECT
+        DATE(first_recharge_ist) AS dt,
+        COUNT(CASE WHEN first_recharge_ist <= DATEADD(day, 21, ticket_created_at_ist) THEN 1 END) AS recharged_within_21d,
+        COUNT(CASE WHEN first_recharge_ist <= DATEADD(day, 21, ticket_created_at_ist)
+                    AND state = 'CANCELLED' AND reason_code = 'DEVICE_RESCUED'
+                    AND ticket_updated_at_ist >= first_recharge_ist
+                    AND ticket_updated_at_ist <= DATEADD(hour, 2, first_recharge_ist) THEN 1 END) AS closed_within_2h,
+        ROUND(closed_within_2h * 100.0 / NULLIF(recharged_within_21d, 0), 1) AS pct_closed_within_2h
     FROM first_recharge_after
+    WHERE DATE(first_recharge_ist) BETWEEN DATEADD(day,-30,CURRENT_DATE()) AND DATEADD(day,-1,CURRENT_DATE())
+      AND NOT (
+          state IN ('COMPLETED', 'FAILED', 'CANCELLED')
+          AND ticket_updated_at_ist < first_recharge_ist
+      )
+    GROUP BY 1
 ),
-daily_metrics AS (
-    SELECT dt, COUNT(*) AS total_recharged_after_ticket,
-        SUM(rescued) AS put_closed, SUM(rescued_within_2h) AS closed_within_2h
-    FROM flagged GROUP BY 1
-),
-metrics AS (
-    SELECT dt, 'Total Recharged After Ticket' AS metric, total_recharged_after_ticket AS val FROM daily_metrics
-    UNION ALL SELECT dt, 'PUT Closed (Device Rescued)', put_closed FROM daily_metrics
-    UNION ALL SELECT dt, 'PUT Closed Within 2 Hours', closed_within_2h FROM daily_metrics
+unpivoted AS (
+    SELECT dt, 'Recharged within 21d of PUT' AS metric, CAST(recharged_within_21d AS FLOAT) AS val FROM daily
+    UNION ALL SELECT dt, 'PUT closed within 2h'          AS metric, CAST(closed_within_2h AS FLOAT) AS val FROM daily
+    UNION ALL SELECT dt, '% Closed within 2h'            AS metric, pct_closed_within_2h AS val FROM daily
 )
-SELECT metric AS "Metric",
+SELECT
+    metric AS "Metric",
     MAX(CASE WHEN dt = DATEADD(day,-1,CURRENT_DATE()) THEN val END) AS "T-1",
     MAX(CASE WHEN dt = DATEADD(day,-2,CURRENT_DATE()) THEN val END) AS "T-2",
     MAX(CASE WHEN dt = DATEADD(day,-3,CURRENT_DATE()) THEN val END) AS "T-3",
@@ -4884,9 +4741,16 @@ SELECT metric AS "Metric",
     MAX(CASE WHEN dt = DATEADD(day,-6,CURRENT_DATE()) THEN val END) AS "T-6",
     MAX(CASE WHEN dt = DATEADD(day,-7,CURRENT_DATE()) THEN val END) AS "T-7",
     MAX(CASE WHEN dt = DATEADD(day,-8,CURRENT_DATE()) THEN val END) AS "T-8",
-    ROUND(AVG(val),1) AS "Mean", ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "Median",
-    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "P90"
-FROM metrics WHERE dt >= CURRENT_DATE - 30 GROUP BY metric ORDER BY metric desc
+    ROUND(AVG(val), 1)                                               AS "30D Avg",
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val), 1)      AS "30D Median",
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1)      AS "30D P90"
+FROM unpivoted
+GROUP BY metric
+ORDER BY CASE metric
+    WHEN 'Recharged within 21d of PUT' THEN 1
+    WHEN 'PUT closed within 2h' THEN 2
+    ELSE 3
+END
 """
 
 QUERIES["put_raw_sd_nbrec"] = r"""
@@ -4944,60 +4808,96 @@ WITH m_c AS (
     FROM PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS
     WHERE _FIVETRAN_ACTIVE
 ),
-tickets AS (
+last_trum AS (
     SELECT
-        DATE(t.CREATED_TIME + INTERVAL '330 minutes') AS dt,
-        t.CREATED_TIME + INTERVAL '330 minutes' AS ticket_created_at,
-        t.CUSTOMER_ACCOUNT_ID
-    FROM PROD_DB.DYNAMODB_READ.TICKETS t
-    JOIN m_c ON m_c.CUSTOMER_ID = t.CUSTOMER_ACCOUNT_ID
-    WHERE DATE(t.CREATED_TIME + INTERVAL '330 minutes')
-            BETWEEN '2026-07-05' AND CURRENT_DATE()-1
-      AND t.TICKET_TYPE = 'ROUTER_PICKUP'
-    QUALIFY ROW_NUMBER() OVER (
-        PARTITION BY t.CUSTOMER_ACCOUNT_ID
-        ORDER BY t.CREATED_TIME DESC
-    ) = 1
+        mc.CUSTOMER_ID                   AS account_id,
+        MAX(trum.OTP_EXPIRY_TIME)::DATE  AS last_otp_expiry
+    FROM T_ROUTER_USER_MAPPING trum
+    JOIN T_WG_CUSTOMER tg ON tg.mobile = trum.mobile
+    JOIN m_c mc           ON mc.CUSTOMER_ID = tg.account_id
+    WHERE trum.otp = 'DONE' AND trum.store_group_id = 0
+      AND trum.device_limit = 10 AND trum.mobile > '5999999999'
+    GROUP BY mc.CUSTOMER_ID
+),
+eligible AS (
+    SELECT
+        account_id,
+        last_otp_expiry,
+        DATEADD('day', 15, last_otp_expiry) AS dt
+    FROM last_trum
+    WHERE DATEADD('day', 15, last_otp_expiry) BETWEEN DATEADD('day', -31, CURRENT_DATE())
+                                                  AND DATEADD('day', -1,  CURRENT_DATE())
+),
+already_has_open_ticket AS (
+    SELECT DISTINCT e.account_id
+    FROM eligible e
+    JOIN PROD_DB.DYNAMODB_READ.TICKETS t
+        ON  t.CUSTOMER_ACCOUNT_ID::VARCHAR = e.account_id::VARCHAR
+        AND t.TICKET_TYPE = 'ROUTER_PICKUP'
+        AND t.STATUS      = 'OPEN'
+        AND DATE(t.CREATED_TIME + INTERVAL '330 minutes')
+                BETWEEN DATEADD('day', -22, e.dt)
+                AND     DATEADD('day', -1,  e.dt)
+),
+eligible_need_ticket AS (
+    SELECT * FROM eligible
+    WHERE account_id NOT IN (SELECT account_id FROM already_has_open_ticket)
+),
+ticket_match AS (
+    SELECT
+        e.account_id,
+        e.dt,
+        e.last_otp_expiry,
+        MIN(t.CREATED_TIME + INTERVAL '330 minutes') AS ticket_created_ist
+    FROM eligible_need_ticket e
+    LEFT JOIN PROD_DB.DYNAMODB_READ.TICKETS t
+        ON  t.CUSTOMER_ACCOUNT_ID::VARCHAR = e.account_id::VARCHAR
+        AND t.TICKET_TYPE = 'ROUTER_PICKUP'
+        AND DATE(t.CREATED_TIME + INTERVAL '330 minutes') >= DATEADD('day', 14, e.last_otp_expiry)
+        AND DATE(t.CREATED_TIME + INTERVAL '330 minutes') <= DATEADD('day', 16, e.last_otp_expiry)
+    GROUP BY 1, 2, 3
 ),
 nbrec AS (
     SELECT
-        c.CUSTOMER_ID,
+        c.CUSTOMER_ID::VARCHAR                  AS account_id,
         nec.CREATED_AT + INTERVAL '330 minutes' AS nbrec_created_at
     FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.NBREC_EXECUTION_CANDIDATES nec
     JOIN PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS c
-      ON nec.LAST_CONNECTION_ID = c.CONNECTION_ID
-     AND c._FIVETRAN_ACTIVE
+        ON  nec.LAST_CONNECTION_ID = c.CONNECTION_ID AND c._FIVETRAN_ACTIVE
     WHERE nec._FIVETRAN_ACTIVE
+      AND nec.CREATED_AT >= DATEADD('day', -34, CURRENT_DATE())
 ),
-matched AS (
+coverage AS (
     SELECT
-        t.dt,
-        t.CUSTOMER_ACCOUNT_ID,
-        t.ticket_created_at,
-        n.nbrec_created_at
-    FROM tickets t
+        tm.dt,
+        tm.account_id,
+        CASE WHEN tm.ticket_created_ist IS NOT NULL THEN 1 ELSE 0 END AS has_ticket,
+        MAX(CASE WHEN n.account_id IS NOT NULL THEN 1 ELSE 0 END)     AS has_nbrec_6h
+    FROM ticket_match tm
     LEFT JOIN nbrec n
-      ON t.CUSTOMER_ACCOUNT_ID = n.CUSTOMER_ID
-     AND ABS(DATEDIFF('hour', t.ticket_created_at, n.nbrec_created_at)) <= 6
-    QUALIFY ROW_NUMBER() OVER (
-        PARTITION BY t.CUSTOMER_ACCOUNT_ID, t.ticket_created_at
-        ORDER BY ABS(DATEDIFF('second', t.ticket_created_at, n.nbrec_created_at))
-    ) = 1
+        ON  n.account_id = tm.account_id::VARCHAR
+        AND tm.ticket_created_ist IS NOT NULL
+        AND ABS(DATEDIFF('hour', tm.ticket_created_ist, n.nbrec_created_at)) <= 6
+    GROUP BY 1, 2, 3
 ),
 daily AS (
-    SELECT dt,
-        COUNT(*) AS total_tickets,
-        COUNT(nbrec_created_at) AS present_in_nbrec_6h
-    FROM matched
+    SELECT
+        dt,
+        COUNT(*)          AS eligible,
+        SUM(has_ticket)   AS ticket_present,
+        SUM(has_nbrec_6h) AS nbrec_present
+    FROM coverage
     GROUP BY 1
 ),
 metrics AS (
-    SELECT dt, 'Total Tickets' AS metric, total_tickets::FLOAT AS val FROM daily
-    UNION ALL SELECT dt, 'NBREC within +/-6 hrs', present_in_nbrec_6h::FLOAT FROM daily
-    UNION ALL SELECT dt, 'PUT Creation Rate', ROUND(100 * present_in_nbrec_6h / NULLIF(total_tickets,0),2) FROM daily
+    SELECT dt, 'Eligible Customers'      AS metric, eligible::FLOAT       AS val FROM daily UNION ALL
+    SELECT dt, 'Ticket Within 16 Days',             ticket_present::FLOAT          FROM daily UNION ALL
+    SELECT dt, 'Ticket Creation Rate %', ROUND(100.0 * ticket_present / NULLIF(eligible, 0), 2) FROM daily UNION ALL
+    SELECT dt, 'NBREC Within +-6h',                 nbrec_present::FLOAT           FROM daily UNION ALL
+    SELECT dt, 'PUT Creation Rate %',    ROUND(100.0 * nbrec_present  / NULLIF(eligible, 0), 2) FROM daily
 )
-SELECT metric AS "Metric",
-    MAX(CASE WHEN dt = CURRENT_DATE() THEN val END) AS "Today",
+SELECT
+    metric AS "Metric",
     MAX(CASE WHEN dt = DATEADD(day,-1,CURRENT_DATE()) THEN val END) AS "T-1",
     MAX(CASE WHEN dt = DATEADD(day,-2,CURRENT_DATE()) THEN val END) AS "T-2",
     MAX(CASE WHEN dt = DATEADD(day,-3,CURRENT_DATE()) THEN val END) AS "T-3",
@@ -5005,15 +4905,19 @@ SELECT metric AS "Metric",
     MAX(CASE WHEN dt = DATEADD(day,-5,CURRENT_DATE()) THEN val END) AS "T-5",
     MAX(CASE WHEN dt = DATEADD(day,-6,CURRENT_DATE()) THEN val END) AS "T-6",
     MAX(CASE WHEN dt = DATEADD(day,-7,CURRENT_DATE()) THEN val END) AS "T-7",
-    ROUND(AVG(val),1) AS "Average",
-    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "Median",
-    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "P90"
+    MAX(CASE WHEN dt = DATEADD(day,-8,CURRENT_DATE()) THEN val END) AS "T-8",
+    ROUND(AVG(val), 1)                                               AS "30D Avg",
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val), 1)      AS "30D Median",
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1)      AS "30D P90"
 FROM metrics
+WHERE dt >= DATEADD('day', -30, CURRENT_DATE())
 GROUP BY metric
 ORDER BY CASE metric
-    WHEN 'Total Tickets' THEN 1
-    WHEN 'NBREC within +/-6 hrs' THEN 2
-    WHEN 'PUT Creation Rate' THEN 3
+    WHEN 'Eligible Customers'      THEN 1
+    WHEN 'Ticket Within 16 Days'   THEN 2
+    WHEN 'Ticket Creation Rate %'  THEN 3
+    WHEN 'NBREC Within +-6h'       THEN 4
+    WHEN 'PUT Creation Rate %'     THEN 5
 END
 """
 
