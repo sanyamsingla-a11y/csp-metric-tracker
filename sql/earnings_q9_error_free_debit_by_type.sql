@@ -22,41 +22,73 @@ tax_events as (
       on w.id=b.wallet_ledger_entry_ref and w._fivetran_active and w.entry_type='TAX_WITHHELD'
     where b._fivetran_active and b.aggregate_tds_paise>0),
 led as (
-    select reference_id withdrawal_id, csp_id, payout_id orig_payout, created_at debit_ts,
-           date(convert_timezone('Asia/Kolkata',created_at)) debit_date
-    from csp_payment_settlement_service_csp_payment_settlement_service.wallet_ledger_entries
-    where _fivetran_active and entry_type='WITHDRAWAL_DEBIT'
-      and date(convert_timezone('Asia/Kolkata',created_at))
+    select w.reference_id withdrawal_id, w.csp_id, w.payout_id orig_payout, w.created_at debit_ts,
+           date(convert_timezone('Asia/Kolkata',w.created_at)) debit_date
+    from csp_payment_settlement_service_csp_payment_settlement_service.wallet_ledger_entries w
+    join csp_account c on c.csp_id=w.csp_id
+    where w._fivetran_active and w.entry_type='WITHDRAWAL_DEBIT'
+      and date(convert_timezone('Asia/Kolkata',w.created_at))
           between (select dateadd('month',-3,current_month_start) from anchors)
               and (select dateadd('day',-1,as_of_date) from anchors)),
-wd_retry as (select withdrawal_id, retry_payout_id, retry_status, retry_utr, retry_status_at
-    from csp_payment_settlement_service_csp_payment_settlement_service.payout_retry_log where not _fivetran_deleted),
 wd_wallet as (
     select reference_id withdrawal_id, round(sum(amount)/100,0) wallet_net_rs,
            sum(iff(reason_code='WITHDRAWAL_REVERSAL',1,0)) reversal_cnt,
            max(iff(reason_code='WITHDRAWAL_REVERSAL',created_at,null)) reversal_ts
     from csp_payment_settlement_service_csp_payment_settlement_service.wallet_ledger_entries
     where _fivetran_active and reference_id in (select withdrawal_id from led) group by 1),
-wd_rzp as (select source_id, max_by(status,_created) status, max_by(utr,_created) utr,
+wd_rzp as (
+    select source_id,
+           max_by(status,
+               case status when 'processed' then 5 when 'reversed' then 5 when 'failed' then 5
+                           when 'processing' then 2 when 'initiated' then 1 when 'queued' then 0
+                           else 3 end * 1e13 + date_part('epoch_second',_created)) status,
+           max_by(utr,
+               case status when 'processed' then 5 when 'reversed' then 5 when 'failed' then 5
+                           when 'processing' then 2 when 'initiated' then 1 when 'queued' then 0
+                           else 3 end * 1e13 + date_part('epoch_second',_created)) utr,
            max(iff(status='processed',_created,null)) processed_ts
     from prod_db.public.razorpayx where source_id is not null group by 1),
+rzp_by_ref as (
+    select reference_id,
+           max_by(status,
+               case status when 'processed' then 5 when 'reversed' then 5 when 'failed' then 5
+                           when 'processing' then 2 when 'initiated' then 1 when 'queued' then 0
+                           else 3 end * 1e13 + date_part('epoch_second',_created)) status,
+           max(utr) utr
+    from prod_db.public.razorpayx where reference_id is not null group by 1),
+wd_retry_resolved as (
+    select l.withdrawal_id,
+           coalesce(
+               iff(r1.status='processed', r1.utr, null),
+               iff(r2.status='processed', r2.utr, null),
+               iff(r3.status='processed', r3.utr, null)
+           ) retry_utr,
+           coalesce(r3.status, r2.status, r1.status) latest_retry_status
+    from led l
+    left join rzp_by_ref r1 on r1.reference_id='wd_'||replace(l.withdrawal_id,'-','')||'r1'
+    left join rzp_by_ref r2 on r2.reference_id='wd_'||replace(l.withdrawal_id,'-','')||'r2'
+    left join rzp_by_ref r3 on r3.reference_id='wd_'||replace(l.withdrawal_id,'-','')||'r3'),
 wd_disp as (
     select l.debit_date,
            case
+             when l.orig_payout is null and r.retry_utr is null
+                  and w.reversal_cnt=0                        then 'NO_PAYOUT_CREATED'
              when coalesce(r.retry_utr, iff(xo.status='processed',xo.utr,null)) is not null
-                  and w.wallet_net_rs<0                                   then 'OK_PAID'
-             when r.retry_utr is null and xo.status<>'processed'
-                  and w.reversal_cnt=0 and r.retry_status='processing'    then 'INFLIGHT_NEFT'
-             when w.wallet_net_rs=0 and w.reversal_cnt>=1                 then 'OK_REVERSED_not_paid'
-             when w.wallet_net_rs>=0 and coalesce(r.retry_utr,xo.utr) is not null then 'ANOMALY_LEAK'
+                  and w.wallet_net_rs<0                       then 'OK_PAID'
+             when r.retry_utr is null
+                  and xo.status in ('processing','initiated','queued')
+                  and w.reversal_cnt=0                        then 'INFLIGHT_NEFT'
+             when w.wallet_net_rs=0 and w.reversal_cnt>=1     then 'OK_REVERSED_not_paid'
+             when w.wallet_net_rs>=0 and coalesce(r.retry_utr,xo.utr) is not null
+                                                              then 'ANOMALY_LEAK'
              else 'REVIEW' end disp
     from led l
     join wd_wallet w on w.withdrawal_id=l.withdrawal_id
-    left join wd_retry r on r.withdrawal_id=l.withdrawal_id
-    left join wd_rzp xo on xo.source_id=l.orig_payout
-    left join wd_rzp xr on xr.source_id=r.retry_payout_id),
+    left join wd_retry_resolved r on r.withdrawal_id=l.withdrawal_id
+    left join wd_rzp xo on xo.source_id=l.orig_payout),
 withdrawal_events as (
-    select 'WITHDRAWAL' event_type, debit_date due_date, iff(disp in ('OK_PAID','OK_REVERSED_not_paid'),1,0) is_correct
+    select 'WITHDRAWAL' event_type, debit_date due_date,
+           iff(disp in ('OK_PAID','OK_REVERSED_not_paid'),1,0) is_correct
     from wd_disp where disp<>'INFLIGHT_NEFT'),
 netbox_events as (
     select 'NETBOX_SECURITY_DEDUCTION' event_type, w.id, date(convert_timezone('Asia/Kolkata',w.created_at)) due_date,
