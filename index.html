@@ -401,11 +401,10 @@ function loadMetric(key, wfName, type) {
   if (key === 'isp_recharge_raw') {
     const ISP_RAW_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'];
     const ispRawSections = [
-      { key: 'isp_raw_recharge_overview', title: '1. Recharge Overview' },
-      { key: 'isp_raw_rdni', title: '2. RDNI Within 3 Days of Recharge' },
-      { key: 'isp_raw_payout', title: '3. Recharge Payout' },
-      { key: 'isp_raw_clos_rv', title: '4. CLOS-RV Window End Match Rate' },
-      { key: 'isp_raw_trum_caeo', title: '5. TRUM vs CAEO Entitlement End Match Rate' },
+      { key: 'isp_raw_rdni', title: '1. RDNI Within 3 Days of Recharge' },
+      { key: 'isp_raw_payout', title: '2. Recharge Payout' },
+      { key: 'isp_raw_clos_rv', title: '3. CLOS-RV Window End Match Rate' },
+      { key: 'isp_raw_trum_caeo', title: '4. TRUM vs CAEO Entitlement End Match Rate' },
     ];
     ispRawSections.forEach((sec, i) => {
       const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[sec.key] : null;
@@ -424,6 +423,11 @@ function loadMetric(key, wfName, type) {
       if (d) combined = combined.concat(d);
     });
     html = buildTableHtml(combined, cols, isRates);
+    const rechargeOverview = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['isp_raw_recharge_overview'] : null;
+    if (rechargeOverview && rechargeOverview.length > 0) {
+      html += '<div class="section-label" style="margin-top:36px">Recharge Overview</div>';
+      html += buildTableHtml(rechargeOverview, ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'], false);
+    }
   }
 
   if (key === 'device_ordering_health') {
