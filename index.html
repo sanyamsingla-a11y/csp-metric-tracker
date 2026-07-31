@@ -621,7 +621,9 @@ function buildTableHtml(rows, cols, pct, clickable) {
     html += '<td>' + (anchor ? '<span class="metric-link" onclick="document.getElementById(\'' + anchor + '\').scrollIntoView({behavior:\'smooth\',block:\'start\'})">' + name + ' ↓</span>' : name) + '</td>';
     cols.forEach(c => {
       const v = row[c] ?? row[c.toUpperCase()] ?? '';
-      html += '<td>' + fmt(v) + (pct && v !== null && v !== undefined && v !== '' ? '%' : '') + '</td>';
+      const numV = parseFloat(v);
+      const redStyle = (pct && !isNaN(numV) && numV < 99) ? ' style="color:#e53e3e;font-weight:600"' : '';
+      html += '<td' + redStyle + '>' + fmt(v) + (pct && v !== null && v !== undefined && v !== '' ? '%' : '') + '</td>';
     });
     html += '</tr>';
   }
@@ -644,7 +646,9 @@ function buildMultiLabelTableHtml(rows, labelCols, dataCols, pct) {
     labelCols.forEach(c => { html += '<td style="text-align:left;font-weight:500">' + (row[c] || '') + '</td>'; });
     dataCols.forEach(c => {
       const v = row[c] ?? '';
-      html += '<td>' + fmt(v) + (pct && v !== null && v !== undefined && v !== '' ? '%' : '') + '</td>';
+      const numV = parseFloat(v);
+      const redStyle = (pct && !isNaN(numV) && numV < 99) ? ' style="color:#e53e3e;font-weight:600"' : '';
+      html += '<td' + redStyle + '>' + fmt(v) + (pct && v !== null && v !== undefined && v !== '' ? '%' : '') + '</td>';
     });
     html += '</tr>';
   }
