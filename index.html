@@ -352,7 +352,7 @@ function loadMetric(key, wfName, type) {
     const absCounts = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['put_health_absolute_counts'] : null;
     if (absCounts && absCounts.length > 0) {
       html += '<div class="section-label" style="margin-top:36px">Absolute Counts</div>';
-      html += buildTableHtml(absCounts, ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'], false);
+      html += buildTableHtml(absCounts, ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','30D Avg','30D Median','30D P90'], false);
     }
   }
 
