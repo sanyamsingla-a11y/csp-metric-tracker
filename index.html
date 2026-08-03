@@ -434,8 +434,13 @@ function loadMetric(key, wfName, type) {
   }
 
   if (key === 'isp_recharge_health') {
-    let combined = rows ? rows.slice() : [];
-    ['isp_health_ticket_creation_rate','isp_health_pn_sent','isp_health_pn_delivered','isp_health_payout_rate','isp_health_clos_rv','isp_health_trum_caeo'].forEach(k => {
+    let combined = [];
+    ['isp_health_trum_caeo','isp_health_ticket_creation_rate','isp_health_pn_sent','isp_health_pn_delivered'].forEach(k => {
+      const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[k] : null;
+      if (d) combined = combined.concat(d);
+    });
+    if (rows) combined = combined.concat(rows);
+    ['isp_health_payout_rate','isp_health_clos_rv'].forEach(k => {
       const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[k] : null;
       if (d) combined = combined.concat(d);
     });
