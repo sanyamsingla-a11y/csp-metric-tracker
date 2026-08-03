@@ -49,6 +49,12 @@ das_reached AS (
   FROM PROD_DB.CSP_DEMAND_ALLOCATION_SERVICE_CSP_DEMAND_ALLOCATION_SERVICE.CONNECTION_ALLOCATIONS
   WHERE ALLOCATION_STATE IN ('ASSIGNED','ACCEPTED','ACTIVE','RELEASED')
 ),
+das_with_csp AS (
+  SELECT DISTINCT aal.CONNECTION_ID
+  FROM PROD_DB.CSP_DEMAND_ALLOCATION_SERVICE_CSP_DEMAND_ALLOCATION_SERVICE.ALLOCATION_AUDIT_LOG aal
+  WHERE aal.candidate_csps_received IS NOT NULL
+    AND aal._fivetran_deleted = FALSE
+),
 tas_created AS (
   SELECT DISTINCT CONNECTION_ID
   FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES
@@ -59,10 +65,12 @@ daily_conn AS (
     COUNT( DISTINCT BB.MOBILE)                                                                 AS total_bookings,
     COUNT(DISTINCT CASE WHEN cr.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)           AS clos_count,
     COUNT(DISTINCT CASE WHEN dr.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)           AS das_count,
+    COUNT(DISTINCT CASE WHEN dwc.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)          AS das_with_csp_count,
     COUNT(DISTINCT CASE WHEN tc.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)           AS tas_count
   FROM bookings_base bb
   LEFT JOIN clos_reached cr ON cr.CONNECTION_ID = bb.CONNECTION_ID
   LEFT JOIN das_reached  dr ON dr.CONNECTION_ID = bb.CONNECTION_ID
+  LEFT JOIN das_with_csp dwc ON dwc.CONNECTION_ID = bb.CONNECTION_ID
   LEFT JOIN tas_created  tc ON tc.CONNECTION_ID = bb.CONNECTION_ID
   GROUP BY 1
 ),
@@ -241,24 +249,23 @@ FROM (
   SELECT  0, '# Bookings Confirmed',                                        dt, total_bookings                   FROM daily_conn
   UNION ALL SELECT  1, 'H1: # Connections Created (CLOS)',                  dt, clos_count                       FROM daily_conn
   UNION ALL SELECT  2, 'H2: # Connections Reached DAS',                     dt, das_count                        FROM daily_conn
-  UNION ALL SELECT  3, 'H3: # Tasks Created (TAS)',                         dt, tas_count                        FROM daily_conn
-  UNION ALL SELECT  4, '# Total Candidates (all cohort)',                   dt, total_candidates                 FROM daily_cand
-  UNION ALL SELECT  5, 'PN: # Sent to CSP',                                 dt, pn_sent_count                    FROM daily_cand
-  UNION ALL SELECT  6, 'PN: # Delivered',                                   dt, pn_delivered_count               FROM daily_cand
-  UNION ALL SELECT  7, 'FPN: # Delivered',                                  dt, fpn_delivered_count              FROM daily_cand
-  UNION ALL SELECT  8, 'WA: # Sent',                                        dt, wa_sent_count                    FROM daily_cand
-  UNION ALL SELECT  9, 'WA: # Delivered',                                   dt, wa_delivered_count               FROM daily_cand
-  UNION ALL SELECT 10, 'Task Attention (PN, FPN, or WA delivered)',          dt, attention_count                  FROM daily_cand
---   UNION ALL SELECT 11, 'Slot Confirm PN: # Sent',                           dt, slot_pn_sent_count               FROM daily_cand
---   UNION ALL SELECT 12, 'Slot Confirm PN: # Delivered',                      dt, slot_pn_delivered_count          FROM daily_cand
-  UNION ALL SELECT 13, 'Technician Assigned',                               dt, tech_assigned_count              FROM daily_cand
-  UNION ALL SELECT 14, 'Technician Assigned (not self)',                    dt, tech_assigned_not_self_count     FROM daily_cand
-  UNION ALL SELECT 15, 'Tech Assigned PN: # Sent',                          dt, tech_pn_sent_count               FROM daily_cand
-  UNION ALL SELECT 16, 'Tech Assigned PN: # Delivered',                     dt, tech_pn_delivered_count          FROM daily_cand
-  UNION ALL SELECT 17, 'P41: # Eligible (no slot proposed, deadline hit)',   dt, p41_eligible_count               FROM daily_cand
-  UNION ALL SELECT 18, 'P41: # Timeout Triggered',                          dt, p41_timeout_count                FROM daily_cand
-  UNION ALL SELECT 19, 'P74: # Eligible (slot confirmed, 72h deadline hit)', dt, p74_eligible_count               FROM daily_cand
-  UNION ALL SELECT 20, 'P74: # Timeout Triggered',                          dt, p74_timeout_count                FROM daily_cand
+  UNION ALL SELECT  3, 'Connections with CSP',                              dt, das_with_csp_count               FROM daily_conn
+  UNION ALL SELECT  4, 'H3: # Tasks Created (TAS)',                         dt, tas_count                        FROM daily_conn
+  UNION ALL SELECT  5, '# Total Candidates (all cohort)',                   dt, total_candidates                 FROM daily_cand
+  UNION ALL SELECT  6, 'PN: # Sent to CSP',                                 dt, pn_sent_count                    FROM daily_cand
+  UNION ALL SELECT  7, 'PN: # Delivered',                                   dt, pn_delivered_count               FROM daily_cand
+  UNION ALL SELECT  8, 'FPN: # Delivered',                                  dt, fpn_delivered_count              FROM daily_cand
+  UNION ALL SELECT  9, 'WA: # Sent',                                        dt, wa_sent_count                    FROM daily_cand
+  UNION ALL SELECT 10, 'WA: # Delivered',                                   dt, wa_delivered_count               FROM daily_cand
+  UNION ALL SELECT 11, 'Task Attention (PN, FPN, or WA delivered)',          dt, attention_count                  FROM daily_cand
+  UNION ALL SELECT 12, 'Technician Assigned',                               dt, tech_assigned_count              FROM daily_cand
+  UNION ALL SELECT 13, 'Technician Assigned (not self)',                    dt, tech_assigned_not_self_count     FROM daily_cand
+  UNION ALL SELECT 14, 'Tech Assigned PN: # Sent',                          dt, tech_pn_sent_count               FROM daily_cand
+  UNION ALL SELECT 15, 'Tech Assigned PN: # Delivered',                     dt, tech_pn_delivered_count          FROM daily_cand
+  UNION ALL SELECT 16, 'P41: # Eligible (no slot proposed, deadline hit)',   dt, p41_eligible_count               FROM daily_cand
+  UNION ALL SELECT 17, 'P41: # Timeout Triggered',                          dt, p41_timeout_count                FROM daily_cand
+  UNION ALL SELECT 18, 'P74: # Eligible (slot confirmed, 72h deadline hit)', dt, p74_eligible_count               FROM daily_cand
+  UNION ALL SELECT 19, 'P74: # Timeout Triggered',                          dt, p74_timeout_count                FROM daily_cand
 ) m (sort_ord, metric_name, dt, val)
 GROUP BY sort_ord, metric_name
 ORDER BY sort_ord
