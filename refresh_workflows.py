@@ -954,14 +954,12 @@ rates_long AS (
     UNION ALL SELECT 8,  'FPN Delivery Rate',               booking_date, fpn_delivery_rate           FROM rates_joined
     UNION ALL SELECT 9,  'WA Sent Rate',                    booking_date, wa_sent_rate                FROM rates_joined
     UNION ALL SELECT 10, 'WA Delivery Rate',                booking_date, wa_delivery_rate            FROM rates_joined
-    UNION ALL SELECT 11, 'Task Reach Rate',                 booking_date, task_reach_rate             FROM rates_joined
+    UNION ALL SELECT 11, 'Task Attention Rate',              booking_date, task_reach_rate             FROM rates_joined
     UNION ALL SELECT 12, 'P41 Timeout Rate',                booking_date, p41_timeout_rate            FROM rates_joined
-    UNION ALL SELECT 13, 'Slot Proposal Reminder Rate',     booking_date, slot_remind_rate            FROM rates_joined
-    UNION ALL SELECT 14, 'Tech Assigned (not self) Rate',   booking_date, tech_not_self_rate          FROM rates_joined
-    UNION ALL SELECT 15, 'Tech Assignment Reminder Rate',   booking_date, tech_remind_rate            FROM rates_joined
-    UNION ALL SELECT 16, 'Tech PN Delivery Rate',           booking_date, tech_pn_delivery_rate       FROM rates_joined
-    UNION ALL SELECT 17, 'P74 Timeout Rate',                booking_date, p74_timeout_rate            FROM rates_joined
-    UNION ALL SELECT 18, 'Connection Active Rate',          booking_date, conn_active_rate            FROM rates_joined
+    UNION ALL SELECT 13, 'Tech Assigned (not self) Rate',   booking_date, tech_not_self_rate          FROM rates_joined
+    UNION ALL SELECT 14, 'Tech PN Delivery Rate',           booking_date, tech_pn_delivery_rate       FROM rates_joined
+    UNION ALL SELECT 15, 'P74 Timeout Rate',                booking_date, p74_timeout_rate            FROM rates_joined
+    UNION ALL SELECT 16, 'Connection Active Rate',          booking_date, conn_active_rate            FROM rates_joined
 )
 SELECT
     metric AS METRIC_NAME,
@@ -1172,10 +1170,8 @@ counts_long AS (
     UNION ALL SELECT  8, '# Drilldown Open',          booking_date, drilldown_open      FROM daily_cand
     UNION ALL SELECT  9, '# Install Task Open',       booking_date, install_task_open   FROM daily_cand
     UNION ALL SELECT 10, '# Slot Declined',           booking_date, slot_declined       FROM daily_cand
-    UNION ALL SELECT 11, '# Slot Proposed',           booking_date, slot_proposed       FROM daily_cand
-    UNION ALL SELECT 12, '# Slot Confirmed',          booking_date, slot_confirmed      FROM daily_cand
-    UNION ALL SELECT 13, '# Tech Assigned',           booking_date, tech_assigned       FROM daily_cand
-    UNION ALL SELECT 14, '# Tech Assigned (not self)', booking_date, tech_assigned_not_self FROM daily_cand
+    UNION ALL SELECT 11, '# Tech Assigned',           booking_date, tech_assigned       FROM daily_cand
+    UNION ALL SELECT 12, '# Tech Assigned (not self)', booking_date, tech_assigned_not_self FROM daily_cand
     UNION ALL SELECT 15, '# Tech Arrived (Selfie)',   booking_date, step_selfie         FROM daily_cand
     UNION ALL SELECT 16, '# Aadhaar Submitted',       booking_date, step_aadhaar        FROM daily_cand
     UNION ALL SELECT 17, '# SD Fee Paid',             booking_date, step_fee            FROM daily_cand
@@ -1429,9 +1425,7 @@ rates_long AS (
     UNION ALL SELECT 7,  'Response Rate ((Proposed+Declined)/Task Open)',   booking_date, response_rate          FROM rates_joined
     UNION ALL SELECT 8,  'Task Decline Rate',                               booking_date, task_decline_rate      FROM rates_joined
     UNION ALL SELECT 9,  'P41 Timeout Rate (L2: /Task Created)',            booking_date, p41_rate_l2            FROM rates_joined
-    UNION ALL SELECT 10, 'Slot Proposed Rate',                              booking_date, slot_proposed_rate     FROM rates_joined
-    UNION ALL SELECT 11, 'Slot Confirmed Rate',                             booking_date, slot_confirmed_rate    FROM rates_joined
-    UNION ALL SELECT 12, 'Technician Assignment Rate',                      booking_date, tech_assigned_rate     FROM rates_joined
+    UNION ALL SELECT 10, 'Technician Assignment Rate',                      booking_date, tech_assigned_rate     FROM rates_joined
     UNION ALL SELECT 13, 'Tech Assigned (not self) Rate',                   booking_date, tech_not_self_rate     FROM rates_joined
     UNION ALL SELECT 14, 'Technician Arrival Rate',                         booking_date, arrival_rate           FROM rates_joined
     UNION ALL SELECT 15, 'Aadhaar Submitted Rate',                          booking_date, aadhaar_rate           FROM rates_joined
