@@ -297,7 +297,7 @@ function loadMetric(key, wfName, type) {
 
   const rows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[key] : null;
 
-  const hasSubtables = key === 'isp_recharge_raw' || key === 'service_tickets_raw' || key === 'pickup_tickets_raw';
+  const hasSubtables = key === 'isp_recharge_raw' || key === 'service_tickets_raw' || key === 'pickup_tickets_raw' || key === 'quality_health';
   if ((!rows || rows.length === 0) && !hasSubtables) {
     document.getElementById('mainBody').innerHTML =
       '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
@@ -444,6 +444,26 @@ function loadMetric(key, wfName, type) {
     if (rechargeOverview && rechargeOverview.length > 0) {
       html += '<div class="section-label" style="margin-top:36px">Recharge Overview</div>';
       html += buildTableHtml(rechargeOverview, ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'], false);
+    }
+  }
+
+  if (key === 'quality_health') {
+    html = '';
+    const qSections = [
+      { k: 'quality_composite_state', title: 'Composite State' },
+      { k: 'quality_tier_verdict', title: 'Tier Verdict' },
+      { k: 'quality_tier_band_breakup', title: 'Tier Band Breakup' },
+      { k: 'quality_m1_m4_breakup', title: 'M1–M4 Breakup' },
+    ];
+    qSections.forEach(s => {
+      const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[s.k] : null;
+      if (d && d.length > 0) {
+        html += '<div class="section-label" style="margin-top:36px">' + s.title + '</div>';
+        html += buildDailyTableHtml(d);
+      }
+    });
+    if (!html) {
+      html = '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
     }
   }
 

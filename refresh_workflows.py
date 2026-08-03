@@ -5464,6 +5464,135 @@ ORDER BY step_ord, stat_ord
 """
 
 
+# ── Quality queries ──────────────────────────────────────────────
+
+QUERIES["quality_composite_state"] = r"""
+WITH latest AS (
+    SELECT MAX(SNAPSHOT_DATE) AS max_dt
+    FROM PROD_DB.CSP_QUALITY_SERVICE_CSP_QUALITY_SERVICE.DAILY_METRIC_SNAPSHOTS
+    WHERE _FIVETRAN_ACTIVE = TRUE
+),
+snap AS (
+    SELECT d.*
+    FROM PROD_DB.CSP_QUALITY_SERVICE_CSP_QUALITY_SERVICE.DAILY_METRIC_SNAPSHOTS d
+    JOIN latest l ON d.SNAPSHOT_DATE = l.max_dt
+    WHERE d._FIVETRAN_ACTIVE = TRUE
+),
+totals AS (
+    SELECT
+        COUNT(DISTINCT CSP_ID)       AS total_csps,
+        SUM(ACTIVE_CONNECTION_COUNT) AS total_connections
+    FROM snap
+)
+SELECT
+    COALESCE(COMPOSITE_STATE, 'NULL')                                                    AS composite_state,
+    COUNT(DISTINCT CSP_ID)                                                               AS csps,
+    ROUND(100.0 * COUNT(DISTINCT CSP_ID) / NULLIF((SELECT total_csps FROM totals), 0), 1) AS pct_csps,
+    SUM(ACTIVE_CONNECTION_COUNT)                                                         AS active_connections,
+    MEDIAN(ACTIVE_CONNECTION_COUNT)                                                      AS median_conns_per_csp,
+    COUNT(DISTINCT CASE
+        WHEN COMPOSITE_STATE = 'COMPLIANT'
+         AND INSTALL_COMPLIANCE_STATE    = 'INSUFFICIENT_DATA'
+         AND RESOLUTION_TIMELINESS_STATE = 'INSUFFICIENT_DATA'
+         AND LONG_OPEN_STATE             = 'INSUFFICIENT_DATA'
+         AND AVG_RATING_STATE            = 'INSUFFICIENT_DATA'
+        THEN CSP_ID END)                                                                 AS compliant_all_insufficient
+FROM snap
+GROUP BY COMPOSITE_STATE
+ORDER BY csps DESC
+"""
+
+QUERIES["quality_tier_verdict"] = r"""
+SELECT
+    CASE WHEN TIER_BAND = 'NONE' THEN 'NONE (ineligible)' ELSE TIER_BAND END AS Tier,
+    COUNT(*)                                                                   AS CSPs,
+    ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 1)                        AS pct_csps,
+    SUM(ACTIVE_CONNECTION_COUNT)                                               AS active_connections,
+    ROUND(100.0 * SUM(ACTIVE_CONNECTION_COUNT)
+          / SUM(SUM(ACTIVE_CONNECTION_COUNT)) OVER (), 1)                      AS pct_connections,
+    MEDIAN(ACTIVE_CONNECTION_COUNT)                                            AS median_conns_per_csp
+FROM PROD_DB.CSP_QUALITY_SERVICE_CSP_QUALITY_SERVICE.DAILY_METRIC_SNAPSHOTS
+WHERE _FIVETRAN_ACTIVE
+  AND SNAPSHOT_DATE = DATEADD(DAY, -1, CURRENT_DATE())
+GROUP BY TIER_BAND
+ORDER BY
+    CASE TIER_BAND
+        WHEN 'VG'       THEN 1
+        WHEN 'GOOD'     THEN 2
+        WHEN 'BASIC'    THEN 3
+        WHEN 'NO_PAYOUT' THEN 4
+        WHEN 'NONE'     THEN 5
+        ELSE 6
+    END
+"""
+
+QUERIES["quality_tier_band_breakup"] = r"""
+WITH latest AS (
+    SELECT MAX(SNAPSHOT_DATE) AS max_dt
+    FROM PROD_DB.CSP_QUALITY_SERVICE_CSP_QUALITY_SERVICE.DAILY_METRIC_SNAPSHOTS
+    WHERE _FIVETRAN_ACTIVE = TRUE
+),
+snap AS (
+    SELECT d.*
+    FROM PROD_DB.CSP_QUALITY_SERVICE_CSP_QUALITY_SERVICE.DAILY_METRIC_SNAPSHOTS d
+    JOIN latest l ON d.SNAPSHOT_DATE = l.max_dt
+    WHERE d._FIVETRAN_ACTIVE = TRUE
+),
+unpvt AS (
+    SELECT 'T1_BAND'     AS band_col, CSP_ID, UPPER(TRIM(T1_BAND))   AS v FROM snap
+    UNION ALL
+    SELECT 'T2_BAND',      CSP_ID, UPPER(TRIM(T2_BAND))              FROM snap
+)
+SELECT
+    band_col,
+    COUNT(DISTINCT CASE WHEN v IN ('VG','VERY_GOOD')    THEN CSP_ID END) AS very_good,
+    COUNT(DISTINCT CASE WHEN v = 'GOOD'                  THEN CSP_ID END) AS good,
+    COUNT(DISTINCT CASE WHEN v IN ('BASE','BASIC')        THEN CSP_ID END) AS base,
+    COUNT(DISTINCT CASE WHEN v = 'INSUFFICIENT'           THEN CSP_ID END) AS insufficient,
+    COUNT(DISTINCT CASE WHEN v = 'NOT_APPLICABLE'         THEN CSP_ID END) AS not_applicable,
+    COUNT(DISTINCT CSP_ID)                                                   AS total_csps
+FROM unpvt
+GROUP BY band_col
+ORDER BY CASE band_col WHEN 'T1_BAND' THEN 1 WHEN 'T2_BAND' THEN 2 ELSE 3 END
+"""
+
+QUERIES["quality_m1_m4_breakup"] = r"""
+WITH latest AS (
+    SELECT MAX(snapshot_date) AS dt
+    FROM PROD_DB.CSP_QUALITY_SERVICE_CSP_QUALITY_SERVICE.DAILY_METRIC_SNAPSHOTS
+    WHERE _FIVETRAN_ACTIVE
+),
+snap AS (
+    SELECT
+        d.CSP_ID,
+        d.INSTALL_COMPLIANCE_STATE,
+        d.RESOLUTION_TIMELINESS_STATE,
+        d.LONG_OPEN_STATE,
+        d.AVG_RATING_STATE
+    FROM PROD_DB.CSP_QUALITY_SERVICE_CSP_QUALITY_SERVICE.DAILY_METRIC_SNAPSHOTS d
+    JOIN latest l ON d.SNAPSHOT_DATE = l.dt
+    WHERE d._FIVETRAN_ACTIVE
+),
+metric_long AS (
+    SELECT CSP_ID, 'M1 (Installation Compliance)'     AS metric, INSTALL_COMPLIANCE_STATE    AS state FROM snap
+    UNION ALL
+    SELECT CSP_ID, 'M2 (Resolution Timeliness)',                  RESOLUTION_TIMELINESS_STATE         FROM snap
+    UNION ALL
+    SELECT CSP_ID, 'M3 (Long-Open Complaint Control)',            LONG_OPEN_STATE                     FROM snap
+    UNION ALL
+    SELECT CSP_ID, 'M4 (Service Rating)',                         AVG_RATING_STATE                    FROM snap
+)
+SELECT
+    metric,
+    COUNT(DISTINCT CASE WHEN state = 'PASS'             THEN CSP_ID END) AS "Pass",
+    COUNT(DISTINCT CASE WHEN state = 'FAIL'             THEN CSP_ID END) AS "Fail",
+    COUNT(DISTINCT CASE WHEN state = 'INSUFFICIENT_DATA' THEN CSP_ID END) AS "Insufficient",
+    COUNT(DISTINCT CSP_ID)                                                AS "Total CSPs"
+FROM metric_long
+GROUP BY metric
+ORDER BY metric
+"""
+
 # ── Earnings queries (loaded from sql/ directory) ─────────────────
 
 def _load_sql(filename):
