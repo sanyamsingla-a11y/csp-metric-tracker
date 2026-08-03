@@ -589,7 +589,7 @@ FROM (
   SELECT  0, '# Bookings Confirmed',                                        dt, total_bookings                   FROM daily_conn
   UNION ALL SELECT  1, 'H1: # Connections Created (CLOS)',                  dt, clos_count                       FROM daily_conn
   UNION ALL SELECT  2, 'H2: # Connections Reached DAS',                     dt, das_count                        FROM daily_conn
-  UNION ALL SELECT  3, '# Connections with CSP',                            dt, das_with_csp_count               FROM daily_conn
+  UNION ALL SELECT  3, 'Connections with CSP',                              dt, das_with_csp_count               FROM daily_conn
   UNION ALL SELECT  4, 'H3: # Tasks Created (TAS)',                         dt, tas_count                        FROM daily_conn
   UNION ALL SELECT  5, '# Total Candidates (all cohort)',                   dt, total_candidates                 FROM daily_cand
   UNION ALL SELECT  6, 'PN: # Sent to CSP',                                 dt, pn_sent_count                    FROM daily_cand
