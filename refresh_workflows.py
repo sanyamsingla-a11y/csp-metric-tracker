@@ -285,6 +285,12 @@ das_reached AS (
   FROM PROD_DB.CSP_DEMAND_ALLOCATION_SERVICE_CSP_DEMAND_ALLOCATION_SERVICE.CONNECTION_ALLOCATIONS
   WHERE ALLOCATION_STATE IN ('ASSIGNED','ACCEPTED','ACTIVE','RELEASED')
 ),
+das_with_csp AS (
+  SELECT DISTINCT aal.CONNECTION_ID
+  FROM PROD_DB.CSP_DEMAND_ALLOCATION_SERVICE_CSP_DEMAND_ALLOCATION_SERVICE.ALLOCATION_AUDIT_LOG aal
+  WHERE aal.candidate_csps_received IS NOT NULL
+    AND aal._fivetran_deleted = FALSE
+),
 tas_created AS (
   SELECT DISTINCT CONNECTION_ID
   FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES
@@ -295,10 +301,12 @@ daily_conn AS (
     COUNT( DISTINCT BB.MOBILE)                                                                 AS total_bookings,
     COUNT(DISTINCT CASE WHEN cr.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)           AS clos_count,
     COUNT(DISTINCT CASE WHEN dr.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)           AS das_count,
+    COUNT(DISTINCT CASE WHEN dwc.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)          AS das_with_csp_count,
     COUNT(DISTINCT CASE WHEN tc.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)           AS tas_count
   FROM bookings_base bb
   LEFT JOIN clos_reached cr ON cr.CONNECTION_ID = bb.CONNECTION_ID
   LEFT JOIN das_reached  dr ON dr.CONNECTION_ID = bb.CONNECTION_ID
+  LEFT JOIN das_with_csp dwc ON dwc.CONNECTION_ID = bb.CONNECTION_ID
   LEFT JOIN tas_created  tc ON tc.CONNECTION_ID = bb.CONNECTION_ID
   GROUP BY 1
 ),
@@ -581,42 +589,43 @@ FROM (
   SELECT  0, '# Bookings Confirmed',                                        dt, total_bookings                   FROM daily_conn
   UNION ALL SELECT  1, 'H1: # Connections Created (CLOS)',                  dt, clos_count                       FROM daily_conn
   UNION ALL SELECT  2, 'H2: # Connections Reached DAS',                     dt, das_count                        FROM daily_conn
-  UNION ALL SELECT  3, 'H3: # Tasks Created (TAS)',                         dt, tas_count                        FROM daily_conn
-  UNION ALL SELECT  4, '# Total Candidates (all cohort)',                   dt, total_candidates                 FROM daily_cand
-  UNION ALL SELECT  5, 'PN: # Sent to CSP',                                 dt, pn_sent_count                    FROM daily_cand
-  UNION ALL SELECT  6, 'PN: # Delivered',                                   dt, pn_delivered_count               FROM daily_cand
-  UNION ALL SELECT  7, 'PN: # Clicked',                                     dt, pn_clicked_count                 FROM daily_cand
-  UNION ALL SELECT  8, 'FPN: # Delivered',                                  dt, fpn_delivered_count              FROM daily_cand
-  UNION ALL SELECT  9, 'FPN: # Clicked',                                    dt, fpn_clicked_count                FROM daily_cand
-  UNION ALL SELECT 10, 'WA: # Sent',                                        dt, wa_sent_count                    FROM daily_cand
-  UNION ALL SELECT 11, 'WA: # Delivered',                                   dt, wa_delivered_count               FROM daily_cand
-  UNION ALL SELECT 12, 'Task Attention (PN, FPN, or WA delivered)',          dt, attention_count                  FROM daily_cand
-  UNION ALL SELECT 13, 'Drilldown Open',                                    dt, drilldown_opened_count           FROM daily_cand
-  UNION ALL SELECT 14, 'Install Task Open (FPN, Drilldown, or WA)',         dt, install_task_open_count          FROM daily_cand
-  UNION ALL SELECT 15, 'Slot Declined by CSP',                              dt, slot_declined_count              FROM daily_cand
-  UNION ALL SELECT 16, 'Technician Assigned',                               dt, tech_assigned_count              FROM daily_cand
-  UNION ALL SELECT 17, 'Technician Assigned (not self)',                    dt, tech_assigned_not_self_count     FROM daily_cand
-  UNION ALL SELECT 18, 'Tech Assigned PN: # Sent',                          dt, tech_pn_sent_count               FROM daily_cand
-  UNION ALL SELECT 19, 'Tech Assigned PN: # Delivered',                     dt, tech_pn_delivered_count          FROM daily_cand
---   UNION ALL SELECT 20, 'No Tech Assigned within 1h',                        dt, no_tech_within_1h_count          FROM daily_cand
-  UNION ALL SELECT 21, 'Technician Arrived at Site',                        dt, tech_arrived_count               FROM daily_cand
-  UNION ALL SELECT 22, 'Step: Selfie',                                      dt, step_selfie_count                FROM daily_cand
-  UNION ALL SELECT 23, 'Step: Aadhaar',                                     dt, step_aadhar_count                FROM daily_cand
-  UNION ALL SELECT 24, 'Step: Security Fee Paid',                           dt, step_sec_fee_count               FROM daily_cand
-  UNION ALL SELECT 25, 'Step: Shared',                                      dt, step_shared_count                FROM daily_cand
-  UNION ALL SELECT 26, 'Step: Connection Info',                             dt, step_conn_info_count             FROM daily_cand
-  UNION ALL SELECT 27, 'Step: Device Photo',                                dt, step_device_photo_count          FROM daily_cand
-  UNION ALL SELECT 28, 'Step: Speed Test',                                  dt, step_speed_test_count            FROM daily_cand
-  UNION ALL SELECT 29, 'Step: Happy Code Pending',                          dt, step_hc_pending_count            FROM daily_cand
-  UNION ALL SELECT 30, 'Step: Happy Code Verified (OTP)',                   dt, step_otp_count                   FROM daily_cand
-  UNION ALL SELECT 31, 'Step: Customer Rating',                             dt, step_rating_count                FROM daily_cand
-  UNION ALL SELECT 32, 'Cancelled by Customer',                             dt, cancelled_by_customer_count      FROM daily_cand
-  UNION ALL SELECT 33, 'Cancelled by Upstream',                             dt, cancelled_by_upstream_count      FROM daily_cand
-  UNION ALL SELECT 34, 'Installation Reported Failed',                      dt, install_failed_count             FROM daily_cand
-  UNION ALL SELECT 35, 'P41: # Eligible (no slot proposed, deadline hit)',   dt, p41_eligible_count               FROM daily_cand
-  UNION ALL SELECT 36, 'P41: # Timeout Triggered',                          dt, p41_timeout_count                FROM daily_cand
-  UNION ALL SELECT 37, 'P74: # Eligible (slot confirmed, 72h deadline hit)', dt, p74_eligible_count               FROM daily_cand
-  UNION ALL SELECT 38, 'P74: # Timeout Triggered',                          dt, p74_timeout_count                FROM daily_cand
+  UNION ALL SELECT  3, '# Connections with CSP',                            dt, das_with_csp_count               FROM daily_conn
+  UNION ALL SELECT  4, 'H3: # Tasks Created (TAS)',                         dt, tas_count                        FROM daily_conn
+  UNION ALL SELECT  5, '# Total Candidates (all cohort)',                   dt, total_candidates                 FROM daily_cand
+  UNION ALL SELECT  6, 'PN: # Sent to CSP',                                 dt, pn_sent_count                    FROM daily_cand
+  UNION ALL SELECT  7, 'PN: # Delivered',                                   dt, pn_delivered_count               FROM daily_cand
+  UNION ALL SELECT  8, 'PN: # Clicked',                                     dt, pn_clicked_count                 FROM daily_cand
+  UNION ALL SELECT  9, 'FPN: # Delivered',                                  dt, fpn_delivered_count              FROM daily_cand
+  UNION ALL SELECT 10, 'FPN: # Clicked',                                    dt, fpn_clicked_count                FROM daily_cand
+  UNION ALL SELECT 11, 'WA: # Sent',                                        dt, wa_sent_count                    FROM daily_cand
+  UNION ALL SELECT 12, 'WA: # Delivered',                                   dt, wa_delivered_count               FROM daily_cand
+  UNION ALL SELECT 13, 'Task Attention (PN, FPN, or WA delivered)',          dt, attention_count                  FROM daily_cand
+  UNION ALL SELECT 14, 'Drilldown Open',                                    dt, drilldown_opened_count           FROM daily_cand
+  UNION ALL SELECT 15, 'Install Task Open (FPN, Drilldown, or WA)',         dt, install_task_open_count          FROM daily_cand
+  UNION ALL SELECT 16, 'Slot Declined by CSP',                              dt, slot_declined_count              FROM daily_cand
+  UNION ALL SELECT 17, 'Technician Assigned',                               dt, tech_assigned_count              FROM daily_cand
+  UNION ALL SELECT 18, 'Technician Assigned (not self)',                    dt, tech_assigned_not_self_count     FROM daily_cand
+  UNION ALL SELECT 19, 'Tech Assigned PN: # Sent',                          dt, tech_pn_sent_count               FROM daily_cand
+  UNION ALL SELECT 20, 'Tech Assigned PN: # Delivered',                     dt, tech_pn_delivered_count          FROM daily_cand
+--   UNION ALL SELECT 21, 'No Tech Assigned within 1h',                        dt, no_tech_within_1h_count          FROM daily_cand
+  UNION ALL SELECT 22, 'Technician Arrived at Site',                        dt, tech_arrived_count               FROM daily_cand
+  UNION ALL SELECT 23, 'Step: Selfie',                                      dt, step_selfie_count                FROM daily_cand
+  UNION ALL SELECT 24, 'Step: Aadhaar',                                     dt, step_aadhar_count                FROM daily_cand
+  UNION ALL SELECT 25, 'Step: Security Fee Paid',                           dt, step_sec_fee_count               FROM daily_cand
+  UNION ALL SELECT 26, 'Step: Shared',                                      dt, step_shared_count                FROM daily_cand
+  UNION ALL SELECT 27, 'Step: Connection Info',                             dt, step_conn_info_count             FROM daily_cand
+  UNION ALL SELECT 28, 'Step: Device Photo',                                dt, step_device_photo_count          FROM daily_cand
+  UNION ALL SELECT 29, 'Step: Speed Test',                                  dt, step_speed_test_count            FROM daily_cand
+  UNION ALL SELECT 30, 'Step: Happy Code Pending',                          dt, step_hc_pending_count            FROM daily_cand
+  UNION ALL SELECT 31, 'Step: Happy Code Verified (OTP)',                   dt, step_otp_count                   FROM daily_cand
+  UNION ALL SELECT 32, 'Step: Customer Rating',                             dt, step_rating_count                FROM daily_cand
+  UNION ALL SELECT 33, 'Cancelled by Customer',                             dt, cancelled_by_customer_count      FROM daily_cand
+  UNION ALL SELECT 34, 'Cancelled by Upstream',                             dt, cancelled_by_upstream_count      FROM daily_cand
+  UNION ALL SELECT 35, 'Installation Reported Failed',                      dt, install_failed_count             FROM daily_cand
+  UNION ALL SELECT 36, 'P41: # Eligible (no slot proposed, deadline hit)',   dt, p41_eligible_count               FROM daily_cand
+  UNION ALL SELECT 37, 'P41: # Timeout Triggered',                          dt, p41_timeout_count                FROM daily_cand
+  UNION ALL SELECT 38, 'P74: # Eligible (slot confirmed, 72h deadline hit)', dt, p74_eligible_count               FROM daily_cand
+  UNION ALL SELECT 39, 'P74: # Timeout Triggered',                          dt, p74_timeout_count                FROM daily_cand
 ) m (sort_ord, metric_name, dt, val)
 GROUP BY sort_ord, metric_name
 ORDER BY sort_ord
@@ -641,6 +650,12 @@ das_reached AS (
     FROM PROD_DB.CSP_DEMAND_ALLOCATION_SERVICE_CSP_DEMAND_ALLOCATION_SERVICE.CONNECTION_ALLOCATIONS
     WHERE ALLOCATION_STATE IN ('ASSIGNED','ACCEPTED','ACTIVE','RELEASED')
 ),
+das_with_csp AS (
+    SELECT DISTINCT aal.CONNECTION_ID
+    FROM PROD_DB.CSP_DEMAND_ALLOCATION_SERVICE_CSP_DEMAND_ALLOCATION_SERVICE.ALLOCATION_AUDIT_LOG aal
+    WHERE aal.candidate_csps_received IS NOT NULL
+      AND aal._fivetran_deleted = FALSE
+),
 tas_created AS (
     SELECT DISTINCT CONNECTION_ID
     FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES
@@ -652,10 +667,12 @@ daily_conn AS (
         COUNT(DISTINCT b.MOBILE) AS bookings,
         COUNT(DISTINCT c.CONNECTION_ID) AS clos_cnt,
         COUNT(DISTINCT d.CONNECTION_ID) AS das_cnt,
+        COUNT(DISTINCT CASE WHEN dwc.CONNECTION_ID IS NOT NULL THEN b.CONNECTION_ID END) AS csp_with_csp_cnt,
         COUNT(DISTINCT t.CONNECTION_ID) AS tas_cnt
     FROM bookings_base b
     LEFT JOIN clos_reached c ON c.CONNECTION_ID = b.CONNECTION_ID
     LEFT JOIN das_reached  d ON d.CONNECTION_ID = b.CONNECTION_ID
+    LEFT JOIN das_with_csp dwc ON dwc.CONNECTION_ID = b.CONNECTION_ID
     LEFT JOIN tas_created  t ON t.CONNECTION_ID = b.CONNECTION_ID
     GROUP BY 1
 ),
@@ -907,6 +924,7 @@ rates_joined AS (
         dc.booking_date,
         dc.clos_cnt * 1.0 / NULLIF(dc.bookings, 0)                       AS conn_creation_rate,
         dc.das_cnt  * 1.0 / NULLIF(dc.clos_cnt, 0)                       AS conn_assigned_rate,
+        dc.csp_with_csp_cnt * 1.0 / NULLIF(dc.das_cnt, 0)               AS csp_with_csp_rate,
         dc.tas_cnt  * 1.0 / NULLIF(dc.das_cnt, 0)                        AS task_creation_rate,
         cd.pn_sent        * 1.0 / NULLIF(cd.total_candidates, 0)         AS pn_sent_rate,
         cd.pn_delivered   * 1.0 / NULLIF(cd.pn_sent, 0)                  AS pn_delivery_rate,
@@ -928,21 +946,22 @@ rates_joined AS (
 rates_long AS (
     SELECT 1  AS sort_ord, 'Connection Creation Rate'       AS metric, booking_date, conn_creation_rate        AS rate FROM rates_joined
     UNION ALL SELECT 2,  'Connection Assigned Rate',        booking_date, conn_assigned_rate         FROM rates_joined
-    UNION ALL SELECT 3,  'Task Creation Rate',              booking_date, task_creation_rate          FROM rates_joined
-    UNION ALL SELECT 4,  'Install PN Sent Rate',            booking_date, pn_sent_rate                FROM rates_joined
-    UNION ALL SELECT 5,  'Install PN Delivery Rate',        booking_date, pn_delivery_rate            FROM rates_joined
-    UNION ALL SELECT 6,  'FPN Sent Rate',                   booking_date, fpn_sent_rate               FROM rates_joined
-    UNION ALL SELECT 7,  'FPN Delivery Rate',               booking_date, fpn_delivery_rate           FROM rates_joined
-    UNION ALL SELECT 8,  'WA Sent Rate',                    booking_date, wa_sent_rate                FROM rates_joined
-    UNION ALL SELECT 9,  'WA Delivery Rate',                booking_date, wa_delivery_rate            FROM rates_joined
-    UNION ALL SELECT 10, 'Task Reach Rate',                 booking_date, task_reach_rate             FROM rates_joined
-    UNION ALL SELECT 11, 'P41 Timeout Rate',                booking_date, p41_timeout_rate            FROM rates_joined
-    UNION ALL SELECT 12, 'Slot Proposal Reminder Rate',     booking_date, slot_remind_rate            FROM rates_joined
-    UNION ALL SELECT 13, 'Tech Assigned (not self) Rate',   booking_date, tech_not_self_rate          FROM rates_joined
-    UNION ALL SELECT 14, 'Tech Assignment Reminder Rate',   booking_date, tech_remind_rate            FROM rates_joined
-    UNION ALL SELECT 15, 'Tech PN Delivery Rate',           booking_date, tech_pn_delivery_rate       FROM rates_joined
-    UNION ALL SELECT 16, 'P74 Timeout Rate',                booking_date, p74_timeout_rate            FROM rates_joined
-    UNION ALL SELECT 17, 'Connection Active Rate',          booking_date, conn_active_rate            FROM rates_joined
+    UNION ALL SELECT 3,  'Connections with CSP %',          booking_date, csp_with_csp_rate          FROM rates_joined
+    UNION ALL SELECT 4,  'Task Creation Rate',              booking_date, task_creation_rate          FROM rates_joined
+    UNION ALL SELECT 5,  'Install PN Sent Rate',            booking_date, pn_sent_rate                FROM rates_joined
+    UNION ALL SELECT 6,  'Install PN Delivery Rate',        booking_date, pn_delivery_rate            FROM rates_joined
+    UNION ALL SELECT 7,  'FPN Sent Rate',                   booking_date, fpn_sent_rate               FROM rates_joined
+    UNION ALL SELECT 8,  'FPN Delivery Rate',               booking_date, fpn_delivery_rate           FROM rates_joined
+    UNION ALL SELECT 9,  'WA Sent Rate',                    booking_date, wa_sent_rate                FROM rates_joined
+    UNION ALL SELECT 10, 'WA Delivery Rate',                booking_date, wa_delivery_rate            FROM rates_joined
+    UNION ALL SELECT 11, 'Task Reach Rate',                 booking_date, task_reach_rate             FROM rates_joined
+    UNION ALL SELECT 12, 'P41 Timeout Rate',                booking_date, p41_timeout_rate            FROM rates_joined
+    UNION ALL SELECT 13, 'Slot Proposal Reminder Rate',     booking_date, slot_remind_rate            FROM rates_joined
+    UNION ALL SELECT 14, 'Tech Assigned (not self) Rate',   booking_date, tech_not_self_rate          FROM rates_joined
+    UNION ALL SELECT 15, 'Tech Assignment Reminder Rate',   booking_date, tech_remind_rate            FROM rates_joined
+    UNION ALL SELECT 16, 'Tech PN Delivery Rate',           booking_date, tech_pn_delivery_rate       FROM rates_joined
+    UNION ALL SELECT 17, 'P74 Timeout Rate',                booking_date, p74_timeout_rate            FROM rates_joined
+    UNION ALL SELECT 18, 'Connection Active Rate',          booking_date, conn_active_rate            FROM rates_joined
 )
 SELECT
     metric AS METRIC_NAME,
