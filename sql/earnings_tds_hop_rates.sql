@@ -94,7 +94,7 @@ period_rates as (
     where d.hop is not null
     group by 1,2)
 
-select hop,
+select hop as metric,
     max(iff(period_name='D-1',val,null)) "D-1",
     max(iff(period_name='D-2',val,null)) "D-2",
     max(iff(period_name='D-3',val,null)) "D-3",
