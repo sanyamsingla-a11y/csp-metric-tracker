@@ -1523,7 +1523,7 @@ daily_rates AS (
   FROM per_day
 ),
 date_range AS (
-  SELECT DATEADD('day', -(ROW_NUMBER() OVER (ORDER BY 1) - 1),
+  SELECT DATEADD('day', -(ROW_NUMBER() OVER (ORDER BY 1)),
                  (SELECT today FROM params)) AS dt
   FROM TABLE(GENERATOR(ROWCOUNT => 8))
 ),
@@ -1641,7 +1641,6 @@ nbrec_daily AS (
 ),
 agg AS (
   SELECT
-    MAX(IFF(d=p.today,   ontime_rate,NULL)) AS ot_d0,
     MAX(IFF(d=p.today-1, ontime_rate,NULL)) AS ot_d1,
     MAX(IFF(d=p.today-2, ontime_rate,NULL)) AS ot_d2,
     MAX(IFF(d=p.today-3, ontime_rate,NULL)) AS ot_d3,
@@ -1649,10 +1648,10 @@ agg AS (
     MAX(IFF(d=p.today-5, ontime_rate,NULL)) AS ot_d5,
     MAX(IFF(d=p.today-6, ontime_rate,NULL)) AS ot_d6,
     MAX(IFF(d=p.today-7, ontime_rate,NULL)) AS ot_d7,
-    ROUND(AVG(IFF(d BETWEEN p.today-7 AND p.today, ontime_rate,NULL)),1) AS ot_avg,
-    ROUND(MEDIAN(IFF(d BETWEEN p.today-7 AND p.today, ontime_rate,NULL)),1) AS ot_med,
-    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-7 AND p.today, ontime_rate,NULL)),1) AS ot_p90,
-    MAX(IFF(d=p.today,   recharge_rate,NULL)) AS rc_d0,
+    MAX(IFF(d=p.today-8, ontime_rate,NULL)) AS ot_d8,
+    ROUND(AVG(IFF(d BETWEEN p.today-8 AND p.today-1, ontime_rate,NULL)),1) AS ot_avg,
+    ROUND(MEDIAN(IFF(d BETWEEN p.today-8 AND p.today-1, ontime_rate,NULL)),1) AS ot_med,
+    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-8 AND p.today-1, ontime_rate,NULL)),1) AS ot_p90,
     MAX(IFF(d=p.today-1, recharge_rate,NULL)) AS rc_d1,
     MAX(IFF(d=p.today-2, recharge_rate,NULL)) AS rc_d2,
     MAX(IFF(d=p.today-3, recharge_rate,NULL)) AS rc_d3,
@@ -1660,14 +1659,14 @@ agg AS (
     MAX(IFF(d=p.today-5, recharge_rate,NULL)) AS rc_d5,
     MAX(IFF(d=p.today-6, recharge_rate,NULL)) AS rc_d6,
     MAX(IFF(d=p.today-7, recharge_rate,NULL)) AS rc_d7,
-    ROUND(AVG(IFF(d BETWEEN p.today-7 AND p.today, recharge_rate,NULL)),1) AS rc_avg,
-    ROUND(MEDIAN(IFF(d BETWEEN p.today-7 AND p.today, recharge_rate,NULL)),1) AS rc_med,
-    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-7 AND p.today, recharge_rate,NULL)),1) AS rc_p90
+    MAX(IFF(d=p.today-8, recharge_rate,NULL)) AS rc_d8,
+    ROUND(AVG(IFF(d BETWEEN p.today-8 AND p.today-1, recharge_rate,NULL)),1) AS rc_avg,
+    ROUND(MEDIAN(IFF(d BETWEEN p.today-8 AND p.today-1, recharge_rate,NULL)),1) AS rc_med,
+    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-8 AND p.today-1, recharge_rate,NULL)),1) AS rc_p90
   FROM daily_rates CROSS JOIN params p
 ),
 isp_agg AS (
   SELECT
-    MAX(IFF(dt=p.today,   isp_expired_pct,NULL)) AS pa_d0,
     MAX(IFF(dt=p.today-1, isp_expired_pct,NULL)) AS pa_d1,
     MAX(IFF(dt=p.today-2, isp_expired_pct,NULL)) AS pa_d2,
     MAX(IFF(dt=p.today-3, isp_expired_pct,NULL)) AS pa_d3,
@@ -1675,14 +1674,14 @@ isp_agg AS (
     MAX(IFF(dt=p.today-5, isp_expired_pct,NULL)) AS pa_d5,
     MAX(IFF(dt=p.today-6, isp_expired_pct,NULL)) AS pa_d6,
     MAX(IFF(dt=p.today-7, isp_expired_pct,NULL)) AS pa_d7,
-    ROUND(AVG(IFF(dt BETWEEN p.today-7 AND p.today, isp_expired_pct,NULL)),1) AS pa_avg,
-    ROUND(MEDIAN(IFF(dt BETWEEN p.today-7 AND p.today, isp_expired_pct,NULL)),1) AS pa_med,
-    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(dt BETWEEN p.today-7 AND p.today, isp_expired_pct,NULL)),1) AS pa_p90
+    MAX(IFF(dt=p.today-8, isp_expired_pct,NULL)) AS pa_d8,
+    ROUND(AVG(IFF(dt BETWEEN p.today-8 AND p.today-1, isp_expired_pct,NULL)),1) AS pa_avg,
+    ROUND(MEDIAN(IFF(dt BETWEEN p.today-8 AND p.today-1, isp_expired_pct,NULL)),1) AS pa_med,
+    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(dt BETWEEN p.today-8 AND p.today-1, isp_expired_pct,NULL)),1) AS pa_p90
   FROM isp_expired_daily CROSS JOIN params p
 ),
 commission_agg AS (
   SELECT
-    MAX(IFF(d=p.today,   commission_open_rate,NULL)) AS cm_d0,
     MAX(IFF(d=p.today-1, commission_open_rate,NULL)) AS cm_d1,
     MAX(IFF(d=p.today-2, commission_open_rate,NULL)) AS cm_d2,
     MAX(IFF(d=p.today-3, commission_open_rate,NULL)) AS cm_d3,
@@ -1690,14 +1689,14 @@ commission_agg AS (
     MAX(IFF(d=p.today-5, commission_open_rate,NULL)) AS cm_d5,
     MAX(IFF(d=p.today-6, commission_open_rate,NULL)) AS cm_d6,
     MAX(IFF(d=p.today-7, commission_open_rate,NULL)) AS cm_d7,
-    ROUND(AVG(IFF(d BETWEEN p.today-7 AND p.today, commission_open_rate,NULL)),1) AS cm_avg,
-    ROUND(MEDIAN(IFF(d BETWEEN p.today-7 AND p.today, commission_open_rate,NULL)),1) AS cm_med,
-    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-7 AND p.today, commission_open_rate,NULL)),1) AS cm_p90
+    MAX(IFF(d=p.today-8, commission_open_rate,NULL)) AS cm_d8,
+    ROUND(AVG(IFF(d BETWEEN p.today-8 AND p.today-1, commission_open_rate,NULL)),1) AS cm_avg,
+    ROUND(MEDIAN(IFF(d BETWEEN p.today-8 AND p.today-1, commission_open_rate,NULL)),1) AS cm_med,
+    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-8 AND p.today-1, commission_open_rate,NULL)),1) AS cm_p90
   FROM commission_daily CROSS JOIN params p
 ),
 nbrec_agg AS (
   SELECT
-    MAX(IFF(d=p.today,   nbrec_failed_pct,NULL)) AS nb_d0,
     MAX(IFF(d=p.today-1, nbrec_failed_pct,NULL)) AS nb_d1,
     MAX(IFF(d=p.today-2, nbrec_failed_pct,NULL)) AS nb_d2,
     MAX(IFF(d=p.today-3, nbrec_failed_pct,NULL)) AS nb_d3,
@@ -1705,10 +1704,10 @@ nbrec_agg AS (
     MAX(IFF(d=p.today-5, nbrec_failed_pct,NULL)) AS nb_d5,
     MAX(IFF(d=p.today-6, nbrec_failed_pct,NULL)) AS nb_d6,
     MAX(IFF(d=p.today-7, nbrec_failed_pct,NULL)) AS nb_d7,
-    ROUND(AVG(IFF(d BETWEEN p.today-7 AND p.today, nbrec_failed_pct,NULL)),1) AS nb_avg,
-    ROUND(MEDIAN(IFF(d BETWEEN p.today-7 AND p.today, nbrec_failed_pct,NULL)),1) AS nb_med,
-    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-7 AND p.today, nbrec_failed_pct,NULL)),1) AS nb_p90,
-    MAX(IFF(d=p.today,   acs_deployed_pct,NULL)) AS acs_d0,
+    MAX(IFF(d=p.today-8, nbrec_failed_pct,NULL)) AS nb_d8,
+    ROUND(AVG(IFF(d BETWEEN p.today-8 AND p.today-1, nbrec_failed_pct,NULL)),1) AS nb_avg,
+    ROUND(MEDIAN(IFF(d BETWEEN p.today-8 AND p.today-1, nbrec_failed_pct,NULL)),1) AS nb_med,
+    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-8 AND p.today-1, nbrec_failed_pct,NULL)),1) AS nb_p90,
     MAX(IFF(d=p.today-1, acs_deployed_pct,NULL)) AS acs_d1,
     MAX(IFF(d=p.today-2, acs_deployed_pct,NULL)) AS acs_d2,
     MAX(IFF(d=p.today-3, acs_deployed_pct,NULL)) AS acs_d3,
@@ -1716,10 +1715,10 @@ nbrec_agg AS (
     MAX(IFF(d=p.today-5, acs_deployed_pct,NULL)) AS acs_d5,
     MAX(IFF(d=p.today-6, acs_deployed_pct,NULL)) AS acs_d6,
     MAX(IFF(d=p.today-7, acs_deployed_pct,NULL)) AS acs_d7,
-    ROUND(AVG(IFF(d BETWEEN p.today-7 AND p.today, acs_deployed_pct,NULL)),1) AS acs_avg,
-    ROUND(MEDIAN(IFF(d BETWEEN p.today-7 AND p.today, acs_deployed_pct,NULL)),1) AS acs_med,
-    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-7 AND p.today, acs_deployed_pct,NULL)),1) AS acs_p90,
-    MAX(IFF(d=p.today,   clos_active_pct,NULL)) AS cl_d0,
+    MAX(IFF(d=p.today-8, acs_deployed_pct,NULL)) AS acs_d8,
+    ROUND(AVG(IFF(d BETWEEN p.today-8 AND p.today-1, acs_deployed_pct,NULL)),1) AS acs_avg,
+    ROUND(MEDIAN(IFF(d BETWEEN p.today-8 AND p.today-1, acs_deployed_pct,NULL)),1) AS acs_med,
+    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-8 AND p.today-1, acs_deployed_pct,NULL)),1) AS acs_p90,
     MAX(IFF(d=p.today-1, clos_active_pct,NULL)) AS cl_d1,
     MAX(IFF(d=p.today-2, clos_active_pct,NULL)) AS cl_d2,
     MAX(IFF(d=p.today-3, clos_active_pct,NULL)) AS cl_d3,
@@ -1727,13 +1726,14 @@ nbrec_agg AS (
     MAX(IFF(d=p.today-5, clos_active_pct,NULL)) AS cl_d5,
     MAX(IFF(d=p.today-6, clos_active_pct,NULL)) AS cl_d6,
     MAX(IFF(d=p.today-7, clos_active_pct,NULL)) AS cl_d7,
-    ROUND(AVG(IFF(d BETWEEN p.today-7 AND p.today, clos_active_pct,NULL)),1) AS cl_avg,
-    ROUND(MEDIAN(IFF(d BETWEEN p.today-7 AND p.today, clos_active_pct,NULL)),1) AS cl_med,
-    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-7 AND p.today, clos_active_pct,NULL)),1) AS cl_p90
+    MAX(IFF(d=p.today-8, clos_active_pct,NULL)) AS cl_d8,
+    ROUND(AVG(IFF(d BETWEEN p.today-8 AND p.today-1, clos_active_pct,NULL)),1) AS cl_avg,
+    ROUND(MEDIAN(IFF(d BETWEEN p.today-8 AND p.today-1, clos_active_pct,NULL)),1) AS cl_med,
+    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-8 AND p.today-1, clos_active_pct,NULL)),1) AS cl_p90
   FROM nbrec_daily CROSS JOIN params p
 )
 SELECT 'Commission Claimed Ticket Open Rate' AS metric,
-    cm_d0 AS "Today", cm_d1 AS "T-1", cm_d2 AS "T-2", cm_d3 AS "T-3", cm_d4 AS "T-4", cm_d5 AS "T-5", cm_d6 AS "T-6", cm_d7 AS "T-7", cm_avg AS "Average", cm_med AS "Median", cm_p90 AS "P90"
+    cm_d1 AS "T-1", cm_d2 AS "T-2", cm_d3 AS "T-3", cm_d4 AS "T-4", cm_d5 AS "T-5", cm_d6 AS "T-6", cm_d7 AS "T-7", cm_d8 AS "T-8", cm_avg AS "Average", cm_med AS "Median", cm_p90 AS "P90"
 FROM commission_agg
 """
 
@@ -2022,11 +2022,10 @@ order by customer_plan_dates asc
     GROUP BY ticket_due_date
 ),
 final AS (
-    SELECT 'ISP Recharge Ticket Creation Rate' AS metric, dt, val FROM daily
+    SELECT 'ISP Ticket Creation Rate (within 2 days)' AS metric, dt, val FROM daily
 )
 SELECT
     metric AS "Metric",
-    MAX(CASE WHEN dt = CURRENT_DATE() THEN val END) AS "Today",
     MAX(CASE WHEN dt = DATEADD(day,-1,CURRENT_DATE()) THEN val END) AS "T-1",
     MAX(CASE WHEN dt = DATEADD(day,-2,CURRENT_DATE()) THEN val END) AS "T-2",
     MAX(CASE WHEN dt = DATEADD(day,-3,CURRENT_DATE()) THEN val END) AS "T-3",
@@ -2034,6 +2033,7 @@ SELECT
     MAX(CASE WHEN dt = DATEADD(day,-5,CURRENT_DATE()) THEN val END) AS "T-5",
     MAX(CASE WHEN dt = DATEADD(day,-6,CURRENT_DATE()) THEN val END) AS "T-6",
     MAX(CASE WHEN dt = DATEADD(day,-7,CURRENT_DATE()) THEN val END) AS "T-7",
+    MAX(CASE WHEN dt = DATEADD(day,-8,CURRENT_DATE()) THEN val END) AS "T-8",
     ROUND(AVG(val),1) AS "Average",
     ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "Median",
     ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "P90"
@@ -2069,7 +2069,6 @@ final AS (
 )
 SELECT
     metric AS "Metric",
-    MAX(CASE WHEN dt = CURRENT_DATE() THEN val END) AS "Today",
     MAX(CASE WHEN dt = DATEADD(day,-1,CURRENT_DATE()) THEN val END) AS "T-1",
     MAX(CASE WHEN dt = DATEADD(day,-2,CURRENT_DATE()) THEN val END) AS "T-2",
     MAX(CASE WHEN dt = DATEADD(day,-3,CURRENT_DATE()) THEN val END) AS "T-3",
@@ -2077,6 +2076,7 @@ SELECT
     MAX(CASE WHEN dt = DATEADD(day,-5,CURRENT_DATE()) THEN val END) AS "T-5",
     MAX(CASE WHEN dt = DATEADD(day,-6,CURRENT_DATE()) THEN val END) AS "T-6",
     MAX(CASE WHEN dt = DATEADD(day,-7,CURRENT_DATE()) THEN val END) AS "T-7",
+    MAX(CASE WHEN dt = DATEADD(day,-8,CURRENT_DATE()) THEN val END) AS "T-8",
     ROUND(AVG(val),1) AS "Average",
     ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "Median",
     ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "P90"
@@ -2117,7 +2117,6 @@ final AS (
 )
 SELECT
     metric AS "Metric",
-    MAX(CASE WHEN dt = CURRENT_DATE() THEN val END) AS "Today",
     MAX(CASE WHEN dt = DATEADD(day,-1,CURRENT_DATE()) THEN val END) AS "T-1",
     MAX(CASE WHEN dt = DATEADD(day,-2,CURRENT_DATE()) THEN val END) AS "T-2",
     MAX(CASE WHEN dt = DATEADD(day,-3,CURRENT_DATE()) THEN val END) AS "T-3",
@@ -2125,6 +2124,7 @@ SELECT
     MAX(CASE WHEN dt = DATEADD(day,-5,CURRENT_DATE()) THEN val END) AS "T-5",
     MAX(CASE WHEN dt = DATEADD(day,-6,CURRENT_DATE()) THEN val END) AS "T-6",
     MAX(CASE WHEN dt = DATEADD(day,-7,CURRENT_DATE()) THEN val END) AS "T-7",
+    MAX(CASE WHEN dt = DATEADD(day,-8,CURRENT_DATE()) THEN val END) AS "T-8",
     ROUND(AVG(val),1) AS "Average",
     ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "Median",
     ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "P90"
@@ -2546,7 +2546,6 @@ daily AS (
 )
 SELECT
     'Payout Rate' AS "Metric",
-    MAX(CASE WHEN dt = CURRENT_DATE() THEN val END) AS "Today",
     MAX(CASE WHEN dt = DATEADD(day,-1,CURRENT_DATE()) THEN val END) AS "T-1",
     MAX(CASE WHEN dt = DATEADD(day,-2,CURRENT_DATE()) THEN val END) AS "T-2",
     MAX(CASE WHEN dt = DATEADD(day,-3,CURRENT_DATE()) THEN val END) AS "T-3",
@@ -2554,6 +2553,7 @@ SELECT
     MAX(CASE WHEN dt = DATEADD(day,-5,CURRENT_DATE()) THEN val END) AS "T-5",
     MAX(CASE WHEN dt = DATEADD(day,-6,CURRENT_DATE()) THEN val END) AS "T-6",
     MAX(CASE WHEN dt = DATEADD(day,-7,CURRENT_DATE()) THEN val END) AS "T-7",
+    MAX(CASE WHEN dt = DATEADD(day,-8,CURRENT_DATE()) THEN val END) AS "T-8",
     ROUND(AVG(val),1) AS "Average",
     ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "Median",
     ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "P90"
@@ -2583,7 +2583,6 @@ params AS (
 )
 SELECT
   'RG Window End vs CONN Latest Recharge Window (%)' AS metric,
-  MAX(CASE WHEN dt = p.today   THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "Today",
   MAX(CASE WHEN dt = p.today-1 THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-1",
   MAX(CASE WHEN dt = p.today-2 THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-2",
   MAX(CASE WHEN dt = p.today-3 THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-3",
@@ -2591,6 +2590,7 @@ SELECT
   MAX(CASE WHEN dt = p.today-5 THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-5",
   MAX(CASE WHEN dt = p.today-6 THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-6",
   MAX(CASE WHEN dt = p.today-7 THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-7",
+  MAX(CASE WHEN dt = p.today-8 THEN ROUND(100.0*matched/NULLIF(clos_total,0),1) END) AS "T-8",
   ROUND(AVG(100.0*matched/NULLIF(clos_total,0)), 1) AS "Average",
   ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY 100.0*matched/NULLIF(clos_total,0)), 1) AS "Median",
   ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY 100.0*matched/NULLIF(clos_total,0)), 1) AS "P90"
@@ -2637,7 +2637,6 @@ m2_daily AS (
   GROUP BY 1
 )
 SELECT 'TRUM Expiry vs CAEO Max Entitlement (%)' AS metric,
-  MAX(CASE WHEN dt=(SELECT dt FROM today_ist)   THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "Today",
   MAX(CASE WHEN dt=DATEADD(day,-1,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-1",
   MAX(CASE WHEN dt=DATEADD(day,-2,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-2",
   MAX(CASE WHEN dt=DATEADD(day,-3,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-3",
@@ -2645,6 +2644,7 @@ SELECT 'TRUM Expiry vs CAEO Max Entitlement (%)' AS metric,
   MAX(CASE WHEN dt=DATEADD(day,-5,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-5",
   MAX(CASE WHEN dt=DATEADD(day,-6,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-6",
   MAX(CASE WHEN dt=DATEADD(day,-7,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-7",
+  MAX(CASE WHEN dt=DATEADD(day,-8,(SELECT dt FROM today_ist)) THEN ROUND(100.0*matched/NULLIF(trum_total,0),1) END) AS "T-8",
   ROUND(AVG(100.0*matched/NULLIF(trum_total,0)),1) AS "Average",
   ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY 100.0*matched/NULLIF(trum_total,0)),1) AS "Median",
   ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY 100.0*matched/NULLIF(trum_total,0)),1) AS "P90"
@@ -2706,7 +2706,7 @@ daily_rates AS (
   FROM per_day
 ),
 date_range AS (
-  SELECT DATEADD('day', -(ROW_NUMBER() OVER (ORDER BY 1) - 1),
+  SELECT DATEADD('day', -(ROW_NUMBER() OVER (ORDER BY 1)),
                  (SELECT today FROM params)) AS dt
   FROM TABLE(GENERATOR(ROWCOUNT => 8))
 ),
@@ -2761,7 +2761,6 @@ rdni_daily AS (
 ),
 agg AS (
   SELECT
-    MAX(IFF(d=p.today,   ontime_rate,NULL)) AS ot_d0,
     MAX(IFF(d=p.today-1, ontime_rate,NULL)) AS ot_d1,
     MAX(IFF(d=p.today-2, ontime_rate,NULL)) AS ot_d2,
     MAX(IFF(d=p.today-3, ontime_rate,NULL)) AS ot_d3,
@@ -2769,10 +2768,10 @@ agg AS (
     MAX(IFF(d=p.today-5, ontime_rate,NULL)) AS ot_d5,
     MAX(IFF(d=p.today-6, ontime_rate,NULL)) AS ot_d6,
     MAX(IFF(d=p.today-7, ontime_rate,NULL)) AS ot_d7,
-    ROUND(AVG(IFF(d BETWEEN p.today-7 AND p.today, ontime_rate,NULL)),1) AS ot_avg,
-    ROUND(MEDIAN(IFF(d BETWEEN p.today-7 AND p.today, ontime_rate,NULL)),1) AS ot_med,
-    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-7 AND p.today, ontime_rate,NULL)),1) AS ot_p90,
-    MAX(IFF(d=p.today,   recharge_rate,NULL)) AS rc_d0,
+    MAX(IFF(d=p.today-8, ontime_rate,NULL)) AS ot_d8,
+    ROUND(AVG(IFF(d BETWEEN p.today-8 AND p.today-1, ontime_rate,NULL)),1) AS ot_avg,
+    ROUND(MEDIAN(IFF(d BETWEEN p.today-8 AND p.today-1, ontime_rate,NULL)),1) AS ot_med,
+    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-8 AND p.today-1, ontime_rate,NULL)),1) AS ot_p90,
     MAX(IFF(d=p.today-1, recharge_rate,NULL)) AS rc_d1,
     MAX(IFF(d=p.today-2, recharge_rate,NULL)) AS rc_d2,
     MAX(IFF(d=p.today-3, recharge_rate,NULL)) AS rc_d3,
@@ -2780,14 +2779,14 @@ agg AS (
     MAX(IFF(d=p.today-5, recharge_rate,NULL)) AS rc_d5,
     MAX(IFF(d=p.today-6, recharge_rate,NULL)) AS rc_d6,
     MAX(IFF(d=p.today-7, recharge_rate,NULL)) AS rc_d7,
-    ROUND(AVG(IFF(d BETWEEN p.today-7 AND p.today, recharge_rate,NULL)),1) AS rc_avg,
-    ROUND(MEDIAN(IFF(d BETWEEN p.today-7 AND p.today, recharge_rate,NULL)),1) AS rc_med,
-    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-7 AND p.today, recharge_rate,NULL)),1) AS rc_p90
+    MAX(IFF(d=p.today-8, recharge_rate,NULL)) AS rc_d8,
+    ROUND(AVG(IFF(d BETWEEN p.today-8 AND p.today-1, recharge_rate,NULL)),1) AS rc_avg,
+    ROUND(MEDIAN(IFF(d BETWEEN p.today-8 AND p.today-1, recharge_rate,NULL)),1) AS rc_med,
+    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-8 AND p.today-1, recharge_rate,NULL)),1) AS rc_p90
   FROM daily_rates CROSS JOIN params p
 ),
 isp_agg AS (
   SELECT
-    MAX(IFF(dt=p.today,   isp_expired_pct,NULL)) AS pa_d0,
     MAX(IFF(dt=p.today-1, isp_expired_pct,NULL)) AS pa_d1,
     MAX(IFF(dt=p.today-2, isp_expired_pct,NULL)) AS pa_d2,
     MAX(IFF(dt=p.today-3, isp_expired_pct,NULL)) AS pa_d3,
@@ -2795,14 +2794,14 @@ isp_agg AS (
     MAX(IFF(dt=p.today-5, isp_expired_pct,NULL)) AS pa_d5,
     MAX(IFF(dt=p.today-6, isp_expired_pct,NULL)) AS pa_d6,
     MAX(IFF(dt=p.today-7, isp_expired_pct,NULL)) AS pa_d7,
-    ROUND(AVG(IFF(dt BETWEEN p.today-7 AND p.today, isp_expired_pct,NULL)),1) AS pa_avg,
-    ROUND(MEDIAN(IFF(dt BETWEEN p.today-7 AND p.today, isp_expired_pct,NULL)),1) AS pa_med,
-    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(dt BETWEEN p.today-7 AND p.today, isp_expired_pct,NULL)),1) AS pa_p90
+    MAX(IFF(dt=p.today-8, isp_expired_pct,NULL)) AS pa_d8,
+    ROUND(AVG(IFF(dt BETWEEN p.today-8 AND p.today-1, isp_expired_pct,NULL)),1) AS pa_avg,
+    ROUND(MEDIAN(IFF(dt BETWEEN p.today-8 AND p.today-1, isp_expired_pct,NULL)),1) AS pa_med,
+    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(dt BETWEEN p.today-8 AND p.today-1, isp_expired_pct,NULL)),1) AS pa_p90
   FROM isp_expired_daily CROSS JOIN params p
 ),
 rdni_agg AS (
   SELECT
-    MAX(IFF(d=p.today,   rdni_pct,NULL)) AS rd_d0,
     MAX(IFF(d=p.today-1, rdni_pct,NULL)) AS rd_d1,
     MAX(IFF(d=p.today-2, rdni_pct,NULL)) AS rd_d2,
     MAX(IFF(d=p.today-3, rdni_pct,NULL)) AS rd_d3,
@@ -2810,31 +2809,32 @@ rdni_agg AS (
     MAX(IFF(d=p.today-5, rdni_pct,NULL)) AS rd_d5,
     MAX(IFF(d=p.today-6, rdni_pct,NULL)) AS rd_d6,
     MAX(IFF(d=p.today-7, rdni_pct,NULL)) AS rd_d7,
-    ROUND(AVG(IFF(d BETWEEN p.today-7 AND p.today, rdni_pct,NULL)),1) AS rd_avg,
-    ROUND(MEDIAN(IFF(d BETWEEN p.today-7 AND p.today, rdni_pct,NULL)),1) AS rd_med,
-    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-7 AND p.today, rdni_pct,NULL)),1) AS rd_p90
+    MAX(IFF(d=p.today-8, rdni_pct,NULL)) AS rd_d8,
+    ROUND(AVG(IFF(d BETWEEN p.today-8 AND p.today-1, rdni_pct,NULL)),1) AS rd_avg,
+    ROUND(MEDIAN(IFF(d BETWEEN p.today-8 AND p.today-1, rdni_pct,NULL)),1) AS rd_med,
+    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY IFF(d BETWEEN p.today-8 AND p.today-1, rdni_pct,NULL)),1) AS rd_p90
   FROM rdni_daily CROSS JOIN params p
 )
 SELECT metric,
-  "Today", "T-1", "T-2", "T-3", "T-4", "T-5", "T-6", "T-7",
+  "T-1", "T-2", "T-3", "T-4", "T-5", "T-6", "T-7", "T-8",
   "Average", "Median", "P90"
 FROM (
   SELECT 1 AS sort_ord, 'On-Time Recharge Rate(Proactive Tickets recharged before cx plan pause)' AS metric,
-    ot_d0 AS "Today", ot_d1 AS "T-1", ot_d2 AS "T-2", ot_d3 AS "T-3",
-    ot_d4 AS "T-4", ot_d5 AS "T-5", ot_d6 AS "T-6", ot_d7 AS "T-7",
+    ot_d1 AS "T-1", ot_d2 AS "T-2", ot_d3 AS "T-3",
+    ot_d4 AS "T-4", ot_d5 AS "T-5", ot_d6 AS "T-6", ot_d7 AS "T-7", ot_d8 AS "T-8",
     ot_avg AS "Average", ot_med AS "Median", ot_p90 AS "P90"
   FROM agg
   UNION ALL
   SELECT 2, 'Connections Pause due to ISP expiry(CX Plan Active)',
-    pa_d0, pa_d1, pa_d2, pa_d3, pa_d4, pa_d5, pa_d6, pa_d7, pa_avg, pa_med, pa_p90
+    pa_d1, pa_d2, pa_d3, pa_d4, pa_d5, pa_d6, pa_d7, pa_d8, pa_avg, pa_med, pa_p90
   FROM isp_agg
   UNION ALL
   SELECT 3, 'Recharge Completion Rate',
-    rc_d0, rc_d1, rc_d2, rc_d3, rc_d4, rc_d5, rc_d6, rc_d7, rc_avg, rc_med, rc_p90
+    rc_d1, rc_d2, rc_d3, rc_d4, rc_d5, rc_d6, rc_d7, rc_d8, rc_avg, rc_med, rc_p90
   FROM agg
   UNION ALL
   SELECT 4, 'ISP Impact on RDNI (complaint raised within 3d of isp recharge)',
-    rd_d0, rd_d1, rd_d2, rd_d3, rd_d4, rd_d5, rd_d6, rd_d7, rd_avg, rd_med, rd_p90
+    rd_d1, rd_d2, rd_d3, rd_d4, rd_d5, rd_d6, rd_d7, rd_d8, rd_avg, rd_med, rd_p90
   FROM rdni_agg
 ) x
 ORDER BY sort_ord
