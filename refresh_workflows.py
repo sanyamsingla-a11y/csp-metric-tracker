@@ -5641,6 +5641,7 @@ EARNINGS_SUBTABLE_QUERIES = {
     "earnings_timely_credit_by_type": "earnings_q12_timely_credit_by_type.sql",
     "earnings_raw":                   "earnings_raw_amounts.sql",
     "earnings_raw_tds_hygiene":       "earnings_raw_tds_hygiene.sql",
+    "earnings_tds_hop_rates":         "earnings_tds_hop_rates.sql",
 }
 
 

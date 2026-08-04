@@ -365,6 +365,11 @@ function loadMetric(key, wfName, type) {
   }
 
   if (key === 'earnings_health') {
+    const tdsHop = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['earnings_tds_hop_rates'] : null;
+    if (tdsHop && tdsHop.length > 0) {
+      html += '<div class="section-label">TDS Hygiene (%)</div>';
+      html += buildTableHtml(tdsHop, COLS_EARNINGS, true);
+    }
     const sub = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['earnings_health_sync_breakup'] : null;
     if (sub && sub.length > 0) {
       html += '<div class="section-label">I1 Sync Rate by Entry Type (%)</div>';
