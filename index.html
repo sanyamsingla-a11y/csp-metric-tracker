@@ -322,6 +322,14 @@ function loadMetric(key, wfName, type) {
     html = buildTableHtml(rows, cols, isRates, stClickable);
   }
 
+  if (key === 'earnings_raw') {
+    const tdsData = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['earnings_raw_tds_hygiene'] : null;
+    if (tdsData && tdsData.length > 0) {
+      html += '<div class="section-label" style="margin-top:36px">TDS Hygiene</div>';
+      html += buildTableHtml(tdsData, COLS_EARNINGS, false);
+    }
+  }
+
   if (key === 'isp_recharge_efficiency') {
     const tatData = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['isp_raw_obligations_resolved'] : null;
     if (tatData && tatData.length > 0) {
