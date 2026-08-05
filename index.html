@@ -431,10 +431,11 @@ function loadMetric(key, wfName, type) {
   if (key === 'isp_recharge_raw') {
     const ISP_RAW_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'];
     const ispRawSections = [
-      { key: 'isp_raw_rdni', title: '1. RDNI Within 3 Days of Recharge' },
-      { key: 'isp_raw_payout', title: '2. Recharge Payout' },
-      { key: 'isp_raw_clos_rv', title: '3. CLOS-RV Window End Match Rate' },
-      { key: 'isp_raw_trum_caeo', title: '4. TRUM vs CAEO Entitlement End Match Rate' },
+      { key: 'isp_raw_ticket_creation', title: '1. Ticket Creation' },
+      { key: 'isp_raw_rdni', title: '2. RDNI Within 3 Days of Recharge' },
+      { key: 'isp_raw_payout', title: '3. Recharge Payout' },
+      { key: 'isp_raw_clos_rv', title: '4. CLOS-RV Window End Match Rate' },
+      { key: 'isp_raw_trum_caeo', title: '5. TRUM vs CAEO Entitlement End Match Rate' },
     ];
     ispRawSections.forEach((sec, i) => {
       const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[sec.key] : null;
@@ -448,7 +449,7 @@ function loadMetric(key, wfName, type) {
 
   if (key === 'isp_recharge_health') {
     let combined = [];
-    ['isp_health_trum_caeo','isp_health_ticket_creation_rate','isp_health_pn_sent','isp_health_pn_delivered'].forEach(k => {
+    ['isp_health_trum_caeo','isp_health_ticket_creation_rate','isp_health_obligation_creation_rate','isp_health_pn_sent','isp_health_pn_delivered'].forEach(k => {
       const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[k] : null;
       if (d) combined = combined.concat(d);
     });

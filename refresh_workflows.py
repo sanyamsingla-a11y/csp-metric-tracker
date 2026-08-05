@@ -5682,6 +5682,21 @@ def refresh():
             print(f"  ERROR on {filename}: {e}")
             data[key] = []
 
+    # ── ISP file-based queries ──────────────────────────────────────
+    ISP_FILE_QUERIES = {
+        "isp_health_obligation_creation_rate": "isp_health_obligation_creation_rate.sql",
+        "isp_raw_ticket_creation": "isp_raw_ticket_creation.sql",
+    }
+    for key, filename in ISP_FILE_QUERIES.items():
+        print(f"  Querying {key}...")
+        try:
+            rows = mb_native(_load_sql(filename))
+            data[key] = rows
+            print(f"  -> {len(rows)} rows")
+        except Exception as e:
+            print(f"  ERROR on {key}: {e}")
+            data[key] = []
+
     # b2i_tat: rename for frontend
     if data.get("b2i_tat"):
         for row in data["b2i_tat"]:
