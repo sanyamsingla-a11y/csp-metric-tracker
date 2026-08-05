@@ -3200,91 +3200,73 @@ SELECT * FROM (
 UNION ALL
 
 SELECT * FROM (
-  -- 3. Ticket Closure Match Rate
+  -- 3. Ticket Close Match % (SRS · TAS · Kapture)
   WITH csp_universe AS (
-    SELECT DISTINCT PARTNER_ID, CSP_ID
+    SELECT DISTINCT PARTNER_ID
     FROM PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT
     WHERE _FIVETRAN_ACTIVE = TRUE AND STATUS = 'ACTIVE' AND PARTNER_ID IS NOT NULL
   ),
-  kap_base AS (
+  srs_closed AS (
     SELECT
-      stm.TICKET_ID,
-      DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) AS dt,
-      stm.IS_RESOLVED                                    AS kap_closed
-    FROM PROD_DB.PUBLIC.SERVICE_TICKET_MODEL stm
+      c.TICKET_ID,
+      DATE(DATEADD(MINUTE, 330, c.CLOSED_TIMESTAMP)) AS closed_dt
+    FROM PROD_DB.CSP_SUPPORT_RESOLUTION_SERVICE_CSP_SUPPORT_RESOLUTION_SERVICE.COMPLAINTS c
+    LEFT JOIN PROD_DB.PUBLIC.SERVICE_TICKET_MODEL stm
+      ON stm.TICKET_ID::VARCHAR = c.TICKET_ID::VARCHAR
     INNER JOIN csp_universe csp
       ON csp.PARTNER_ID::INT = COALESCE(stm.CURRENT_PARTNER_ACCOUNT_ID::INT, stm.LCO_ACCOUNT_ID::INT)
-    WHERE stm.TICKET_ID IS NOT NULL
-      AND REGEXP_LIKE(stm.TICKET_ID, '^[0-9]+$')
+    WHERE c._FIVETRAN_ACTIVE = TRUE
+      AND c.STATUS = 'CLOSED'
+      AND c.TICKET_ID IS NOT NULL
+      AND c.TICKET_ID NOT LIKE 'prod-test%'
+      AND REGEXP_LIKE(c.TICKET_ID, '^[0-9]+$')
       AND (stm.LAST_TITLE ILIKE 'Internet Issues|%' OR stm.LAST_TITLE ILIKE 'Internet Issues |%')
-      AND DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) >= DATEADD('day', -30, CURRENT_DATE())
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY stm.TICKET_ID ORDER BY stm.TICKET_ADDED_TIME DESC) = 1
+      AND DATE(DATEADD(MINUTE, 330, c.CLOSED_TIMESTAMP)) >= DATEADD('day', -30, CURRENT_DATE())
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY c.TICKET_ID ORDER BY c.CLOSED_TIMESTAMP DESC) = 1
   ),
-  srs_latest AS (
-    SELECT
-      TICKET_ID,
-      CASE WHEN STATUS = 'CLOSED' THEN 1 ELSE 0 END AS srs_closed
-    FROM PROD_DB.CSP_SUPPORT_RESOLUTION_SERVICE_CSP_SUPPORT_RESOLUTION_SERVICE.COMPLAINTS
-    WHERE _FIVETRAN_ACTIVE = TRUE
-      AND TICKET_ID IS NOT NULL
-      AND TICKET_ID NOT LIKE 'prod-test%'
-      AND REGEXP_LIKE(TICKET_ID, '^[0-9]+$')
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY TICKET_ID ORDER BY CREATED_AT DESC, VERSION DESC) = 1
-  ),
-  tas_latest AS (
-    SELECT
-      TICKET_ID,
-      CASE WHEN STATE = 'COMPLETED' THEN 1 ELSE 0 END AS tas_closed
+  tas_completed AS (
+    SELECT DISTINCT TICKET_ID
     FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RESTORE_EXECUTION_CANDIDATES
-    WHERE _FIVETRAN_ACTIVE = TRUE
-      AND TICKET_ID IS NOT NULL
-      AND REGEXP_LIKE(TICKET_ID, '^[0-9]+$')
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY TICKET_ID ORDER BY UPDATED_AT DESC, STATE_VERSION DESC) = 1
+    WHERE _FIVETRAN_ACTIVE = TRUE AND STATE = 'COMPLETED'
+      AND TICKET_ID IS NOT NULL AND REGEXP_LIKE(TICKET_ID, '^[0-9]+$')
   ),
-  joined AS (
-    SELECT
-      k.dt,
-      k.TICKET_ID,
-      k.kap_closed,
-      COALESCE(s.srs_closed, 0)                           AS srs_closed,
-      COALESCE(t.tas_closed, 0)                           AS tas_closed,
-      CASE WHEN s.TICKET_ID IS NOT NULL THEN 1 ELSE 0 END AS in_srs,
-      CASE WHEN t.TICKET_ID IS NOT NULL THEN 1 ELSE 0 END AS in_tas
-    FROM kap_base k
-    LEFT JOIN srs_latest s ON s.TICKET_ID = k.TICKET_ID
-    LEFT JOIN tas_latest t ON t.TICKET_ID = k.TICKET_ID
+  stm_resolved AS (
+    SELECT DISTINCT TICKET_ID
+    FROM PROD_DB.PUBLIC.SERVICE_TICKET_MODEL
+    WHERE TICKET_ID IS NOT NULL AND REGEXP_LIKE(TICKET_ID, '^[0-9]+$') AND IS_RESOLVED = 1
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY TICKET_ID ORDER BY TICKET_ADDED_TIME DESC) = 1
   ),
   daily AS (
     SELECT
-      dt,
-      ROUND(100.0 * SUM(CASE WHEN kap_closed=1 AND in_srs=1 THEN srs_closed ELSE 0 END) / NULLIF(SUM(kap_closed), 0), 1)                                                                AS kap_closed_to_srs_closed_pct,
-      ROUND(100.0 * SUM(CASE WHEN kap_closed=1 AND in_tas=1 THEN tas_closed ELSE 0 END) / NULLIF(SUM(kap_closed), 0), 1)                                                                 AS kap_closed_to_tas_completed_pct,
-      ROUND(100.0 * SUM(CASE WHEN srs_closed=1 THEN kap_closed ELSE 0 END) / NULLIF(SUM(CASE WHEN in_srs=1 AND srs_closed=1 THEN 1 ELSE 0 END), 0), 1)                                  AS srs_closed_to_kap_resolved_pct,
-      ROUND(100.0 * SUM(CASE WHEN tas_closed=1 THEN kap_closed ELSE 0 END) / NULLIF(SUM(CASE WHEN in_tas=1 AND tas_closed=1 THEN 1 ELSE 0 END), 0), 1)                                  AS tas_completed_to_kap_resolved_pct
-    FROM joined
-    GROUP BY dt
+      s.closed_dt                                                                   AS dt,
+      COUNT(DISTINCT s.TICKET_ID)                                                   AS srs_cnt,
+      COUNT(DISTINCT CASE WHEN t.TICKET_ID IS NOT NULL THEN s.TICKET_ID END)        AS tas_cnt,
+      COUNT(DISTINCT CASE WHEN m.TICKET_ID IS NOT NULL THEN s.TICKET_ID END)        AS stm_cnt
+    FROM srs_closed s
+    LEFT JOIN tas_completed t ON t.TICKET_ID::VARCHAR = s.TICKET_ID::VARCHAR
+    LEFT JOIN stm_resolved  m ON m.TICKET_ID::VARCHAR = s.TICKET_ID::VARCHAR
+    GROUP BY s.closed_dt
   ),
-  daily_avg AS (
+  daily_pct AS (
     SELECT
       dt,
-      ROUND((kap_closed_to_srs_closed_pct + kap_closed_to_tas_completed_pct
-             + srs_closed_to_kap_resolved_pct + tas_completed_to_kap_resolved_pct) / 4.0, 1) AS val
+      ROUND(100.0 * (srs_cnt + tas_cnt + stm_cnt) / NULLIF(srs_cnt * 3, 0), 1) AS overall_match_pct
     FROM daily
   )
   SELECT
-    'Ticket Closure Match Rate'                                                AS "Metric",
-    MAX(CASE WHEN dt = DATEADD('day', -1, CURRENT_DATE()) THEN val END)       AS "T-1",
-    MAX(CASE WHEN dt = DATEADD('day', -2, CURRENT_DATE()) THEN val END)       AS "T-2",
-    MAX(CASE WHEN dt = DATEADD('day', -3, CURRENT_DATE()) THEN val END)       AS "T-3",
-    MAX(CASE WHEN dt = DATEADD('day', -4, CURRENT_DATE()) THEN val END)       AS "T-4",
-    MAX(CASE WHEN dt = DATEADD('day', -5, CURRENT_DATE()) THEN val END)       AS "T-5",
-    MAX(CASE WHEN dt = DATEADD('day', -6, CURRENT_DATE()) THEN val END)       AS "T-6",
-    MAX(CASE WHEN dt = DATEADD('day', -7, CURRENT_DATE()) THEN val END)       AS "T-7",
-    MAX(CASE WHEN dt = DATEADD('day', -8, CURRENT_DATE()) THEN val END)       AS "T-8",
-    ROUND(AVG(val), 1)                                                         AS "30D Avg",
-    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val), 1)                AS "30D Median",
-    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1)                AS "30D P90"
-  FROM daily_avg
+    'Ticket Close Match % (SRS · TAS · Kapture)'                                   AS "Metric",
+    MAX(CASE WHEN dt = DATEADD('day',-1,CURRENT_DATE()) THEN overall_match_pct END) AS "T-1",
+    MAX(CASE WHEN dt = DATEADD('day',-2,CURRENT_DATE()) THEN overall_match_pct END) AS "T-2",
+    MAX(CASE WHEN dt = DATEADD('day',-3,CURRENT_DATE()) THEN overall_match_pct END) AS "T-3",
+    MAX(CASE WHEN dt = DATEADD('day',-4,CURRENT_DATE()) THEN overall_match_pct END) AS "T-4",
+    MAX(CASE WHEN dt = DATEADD('day',-5,CURRENT_DATE()) THEN overall_match_pct END) AS "T-5",
+    MAX(CASE WHEN dt = DATEADD('day',-6,CURRENT_DATE()) THEN overall_match_pct END) AS "T-6",
+    MAX(CASE WHEN dt = DATEADD('day',-7,CURRENT_DATE()) THEN overall_match_pct END) AS "T-7",
+    MAX(CASE WHEN dt = DATEADD('day',-8,CURRENT_DATE()) THEN overall_match_pct END) AS "T-8",
+    ROUND(AVG(overall_match_pct), 1)                                                AS "30D Avg",
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY overall_match_pct), 1)       AS "30D Median",
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY overall_match_pct), 1)       AS "30D P90"
+  FROM daily_pct
 )
 
 UNION ALL
@@ -3662,63 +3644,78 @@ ORDER BY CASE metric WHEN 'Total tickets' THEN 1 WHEN 'Secondary subtype %' THEN
 
 QUERIES["st_detail_closure"] = r"""
 WITH csp_universe AS (
-  SELECT DISTINCT PARTNER_ID, CSP_ID FROM PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT
+  SELECT DISTINCT PARTNER_ID
+  FROM PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT
   WHERE _FIVETRAN_ACTIVE = TRUE AND STATUS = 'ACTIVE' AND PARTNER_ID IS NOT NULL
 ),
-kap_base AS (
-  SELECT stm.TICKET_ID, DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) AS dt, stm.IS_RESOLVED AS kap_closed
-  FROM PROD_DB.PUBLIC.SERVICE_TICKET_MODEL stm
-  INNER JOIN csp_universe csp ON csp.PARTNER_ID::INT = COALESCE(stm.CURRENT_PARTNER_ACCOUNT_ID::INT, stm.LCO_ACCOUNT_ID::INT)
-  WHERE stm.TICKET_ID IS NOT NULL AND REGEXP_LIKE(stm.TICKET_ID, '^[0-9]+$')
+srs_closed AS (
+  SELECT
+    c.TICKET_ID,
+    DATE(DATEADD(MINUTE, 330, c.CLOSED_TIMESTAMP)) AS closed_dt
+  FROM PROD_DB.CSP_SUPPORT_RESOLUTION_SERVICE_CSP_SUPPORT_RESOLUTION_SERVICE.COMPLAINTS c
+  LEFT JOIN PROD_DB.PUBLIC.SERVICE_TICKET_MODEL stm
+    ON stm.TICKET_ID::VARCHAR = c.TICKET_ID::VARCHAR
+  INNER JOIN csp_universe csp
+    ON csp.PARTNER_ID::INT = COALESCE(stm.CURRENT_PARTNER_ACCOUNT_ID::INT, stm.LCO_ACCOUNT_ID::INT)
+  WHERE c._FIVETRAN_ACTIVE = TRUE
+    AND c.STATUS = 'CLOSED'
+    AND c.TICKET_ID IS NOT NULL
+    AND c.TICKET_ID NOT LIKE 'prod-test%'
+    AND REGEXP_LIKE(c.TICKET_ID, '^[0-9]+$')
     AND (stm.LAST_TITLE ILIKE 'Internet Issues|%' OR stm.LAST_TITLE ILIKE 'Internet Issues |%')
-    AND DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) >= DATEADD('day', -30, CURRENT_DATE())
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY stm.TICKET_ID ORDER BY stm.TICKET_ADDED_TIME DESC) = 1
+    AND DATE(DATEADD(MINUTE, 330, c.CLOSED_TIMESTAMP)) >= DATEADD('day', -30, CURRENT_DATE())
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY c.TICKET_ID ORDER BY c.CLOSED_TIMESTAMP DESC) = 1
 ),
-srs_latest AS (
-  SELECT TICKET_ID, CASE WHEN STATUS = 'CLOSED' THEN 1 ELSE 0 END AS srs_closed
-  FROM PROD_DB.CSP_SUPPORT_RESOLUTION_SERVICE_CSP_SUPPORT_RESOLUTION_SERVICE.COMPLAINTS
-  WHERE _FIVETRAN_ACTIVE = TRUE AND TICKET_ID IS NOT NULL AND TICKET_ID NOT LIKE 'prod-test%' AND REGEXP_LIKE(TICKET_ID, '^[0-9]+$')
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY TICKET_ID ORDER BY CREATED_AT DESC, VERSION DESC) = 1
-),
-tas_latest AS (
-  SELECT TICKET_ID, CASE WHEN STATE = 'COMPLETED' THEN 1 ELSE 0 END AS tas_closed
+tas_completed AS (
+  SELECT DISTINCT TICKET_ID
   FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RESTORE_EXECUTION_CANDIDATES
-  WHERE _FIVETRAN_ACTIVE = TRUE AND TICKET_ID IS NOT NULL AND REGEXP_LIKE(TICKET_ID, '^[0-9]+$')
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY TICKET_ID ORDER BY UPDATED_AT DESC, STATE_VERSION DESC) = 1
+  WHERE _FIVETRAN_ACTIVE = TRUE AND STATE = 'COMPLETED'
+    AND TICKET_ID IS NOT NULL AND REGEXP_LIKE(TICKET_ID, '^[0-9]+$')
 ),
-joined AS (
-  SELECT k.dt, k.TICKET_ID, k.kap_closed, COALESCE(s.srs_closed, 0) AS srs_closed, COALESCE(t.tas_closed, 0) AS tas_closed,
-    CASE WHEN s.TICKET_ID IS NOT NULL THEN 1 ELSE 0 END AS in_srs, CASE WHEN t.TICKET_ID IS NOT NULL THEN 1 ELSE 0 END AS in_tas
-  FROM kap_base k LEFT JOIN srs_latest s ON s.TICKET_ID = k.TICKET_ID LEFT JOIN tas_latest t ON t.TICKET_ID = k.TICKET_ID
+stm_resolved AS (
+  SELECT DISTINCT TICKET_ID
+  FROM PROD_DB.PUBLIC.SERVICE_TICKET_MODEL
+  WHERE TICKET_ID IS NOT NULL AND REGEXP_LIKE(TICKET_ID, '^[0-9]+$') AND IS_RESOLVED = 1
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY TICKET_ID ORDER BY TICKET_ADDED_TIME DESC) = 1
 ),
 daily AS (
-  SELECT dt, SUM(kap_closed) AS kap_resolved_cnt,
-    ROUND(100.0 * SUM(CASE WHEN kap_closed=1 AND in_srs=1 THEN srs_closed ELSE 0 END) / NULLIF(SUM(kap_closed), 0), 1) AS kap_closed_to_srs_closed_pct,
-    ROUND(100.0 * SUM(CASE WHEN kap_closed=1 AND in_tas=1 THEN tas_closed ELSE 0 END) / NULLIF(SUM(kap_closed), 0), 1) AS kap_closed_to_tas_completed_pct,
-    ROUND(100.0 * SUM(CASE WHEN srs_closed=1 THEN kap_closed ELSE 0 END) / NULLIF(SUM(CASE WHEN in_srs=1 AND srs_closed=1 THEN 1 ELSE 0 END), 0), 1) AS srs_closed_to_kap_resolved_pct,
-    ROUND(100.0 * SUM(CASE WHEN tas_closed=1 THEN kap_closed ELSE 0 END) / NULLIF(SUM(CASE WHEN in_tas=1 AND tas_closed=1 THEN 1 ELSE 0 END), 0), 1) AS tas_completed_to_kap_resolved_pct
-  FROM joined GROUP BY dt
+  SELECT
+    s.closed_dt                                                                   AS dt,
+    COUNT(DISTINCT s.TICKET_ID)                                                   AS srs_closed_cnt,
+    COUNT(DISTINCT CASE WHEN t.TICKET_ID IS NOT NULL THEN s.TICKET_ID END)        AS also_tas_cnt,
+    COUNT(DISTINCT CASE WHEN m.TICKET_ID IS NOT NULL THEN s.TICKET_ID END)        AS also_stm_cnt
+  FROM srs_closed s
+  LEFT JOIN tas_completed t ON t.TICKET_ID::VARCHAR = s.TICKET_ID::VARCHAR
+  LEFT JOIN stm_resolved  m ON m.TICKET_ID::VARCHAR = s.TICKET_ID::VARCHAR
+  GROUP BY s.closed_dt
+),
+with_pct AS (
+  SELECT *,
+    ROUND(100.0 * also_tas_cnt / NULLIF(srs_closed_cnt, 0), 1) AS tas_pct,
+    ROUND(100.0 * also_stm_cnt / NULLIF(srs_closed_cnt, 0), 1) AS stm_pct
+  FROM daily
 ),
 unpivoted AS (
-  SELECT dt, 'Kapture resolved (count)' AS metric, kap_resolved_cnt::FLOAT AS val FROM daily
-  UNION ALL SELECT dt, 'Kap closed → SRS closed %', kap_closed_to_srs_closed_pct FROM daily
-  UNION ALL SELECT dt, 'Kap closed → TAS completed %', kap_closed_to_tas_completed_pct FROM daily
-  UNION ALL SELECT dt, 'SRS closed → Kap resolved %', srs_closed_to_kap_resolved_pct FROM daily
-  UNION ALL SELECT dt, 'TAS completed → Kap resolved %', tas_completed_to_kap_resolved_pct FROM daily
+  SELECT dt, 'SRS Closed Count'  AS metric, srs_closed_cnt::FLOAT AS val FROM with_pct
+  UNION ALL SELECT dt, 'TAS Completed Count', also_tas_cnt::FLOAT         FROM with_pct
+  UNION ALL SELECT dt, 'STM Resolved Count',  also_stm_cnt::FLOAT         FROM with_pct
+  UNION ALL SELECT dt, 'SRS-TAS Closed Ticket Match %',      tas_pct                    FROM with_pct
+  UNION ALL SELECT dt, 'SRS-STM Closed Ticket Match %',       stm_pct                    FROM with_pct
 )
-SELECT metric AS "Metric",
-  MAX(CASE WHEN dt = DATEADD('day',-1,CURRENT_DATE()) THEN val END) AS "T-1",
-  MAX(CASE WHEN dt = DATEADD('day',-2,CURRENT_DATE()) THEN val END) AS "T-2",
-  MAX(CASE WHEN dt = DATEADD('day',-3,CURRENT_DATE()) THEN val END) AS "T-3",
-  MAX(CASE WHEN dt = DATEADD('day',-4,CURRENT_DATE()) THEN val END) AS "T-4",
-  MAX(CASE WHEN dt = DATEADD('day',-5,CURRENT_DATE()) THEN val END) AS "T-5",
-  MAX(CASE WHEN dt = DATEADD('day',-6,CURRENT_DATE()) THEN val END) AS "T-6",
-  MAX(CASE WHEN dt = DATEADD('day',-7,CURRENT_DATE()) THEN val END) AS "T-7",
-  MAX(CASE WHEN dt = DATEADD('day',-8,CURRENT_DATE()) THEN val END) AS "T-8",
+SELECT
+  metric                                                                     AS "Metric",
+  MAX(CASE WHEN dt = DATEADD('day',-1,CURRENT_DATE()) THEN val END)          AS "T-1",
+  MAX(CASE WHEN dt = DATEADD('day',-2,CURRENT_DATE()) THEN val END)          AS "T-2",
+  MAX(CASE WHEN dt = DATEADD('day',-3,CURRENT_DATE()) THEN val END)          AS "T-3",
+  MAX(CASE WHEN dt = DATEADD('day',-4,CURRENT_DATE()) THEN val END)          AS "T-4",
+  MAX(CASE WHEN dt = DATEADD('day',-5,CURRENT_DATE()) THEN val END)          AS "T-5",
+  MAX(CASE WHEN dt = DATEADD('day',-6,CURRENT_DATE()) THEN val END)          AS "T-6",
+  MAX(CASE WHEN dt = DATEADD('day',-7,CURRENT_DATE()) THEN val END)          AS "T-7",
+  MAX(CASE WHEN dt = DATEADD('day',-8,CURRENT_DATE()) THEN val END)          AS "T-8",
   ROUND(AVG(val), 1) AS "Mean", ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val), 1) AS "Median",
   ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1) AS "P90"
 FROM unpivoted GROUP BY metric
-ORDER BY CASE metric WHEN 'Kapture resolved (count)' THEN 1 WHEN 'Kap closed → SRS closed %' THEN 2 WHEN 'Kap closed → TAS completed %' THEN 3 WHEN 'SRS closed → Kap resolved %' THEN 6 WHEN 'TAS completed → Kap resolved %' THEN 7 END
+ORDER BY CASE metric WHEN 'SRS Closed Count' THEN 1 WHEN 'TAS Completed Count' THEN 2 WHEN 'STM Resolved Count' THEN 3 WHEN 'SRS-TAS Closed Ticket Match %' THEN 4 WHEN 'SRS-STM Closed Ticket Match %' THEN 5 END
 """
 
 QUERIES["st_detail_tat_accuracy"] = r"""
