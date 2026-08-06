@@ -5650,6 +5650,11 @@ def _build_all_file_queries():
     d.update({
         "isp_health_obligation_creation_rate": "isp_health_obligation_creation_rate.sql",
         "isp_raw_ticket_creation": "isp_raw_ticket_creation.sql",
+        "quality_m1_comp_acc": "quality_m1_comp_acc.sql",
+        "quality_m2_comp_acc": "quality_m2_comp_acc.sql",
+        "quality_m3_comp_acc": "quality_m3_comp_acc.sql",
+        "quality_m4_comp_acc": "quality_m4_comp_acc.sql",
+        "quality_t1t2_comp_acc": "quality_t1t2_comp_acc.sql",
     })
     return d
 

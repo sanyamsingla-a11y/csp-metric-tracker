@@ -472,6 +472,24 @@ function loadMetric(key, wfName, type) {
     }
   }
 
+  if (key === 'quality_health') {
+    const QUALITY_COMP_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','30D Avg','30D Median','30D P90'];
+    const qhSections = [
+      { k: 'quality_m1_comp_acc', title: 'M1 Comprehensiveness & Accuracy' },
+      { k: 'quality_m2_comp_acc', title: 'M2 Comprehensiveness & Accuracy' },
+      { k: 'quality_m3_comp_acc', title: 'M3 Comprehensiveness & Accuracy' },
+      { k: 'quality_m4_comp_acc', title: 'M4 Comprehensiveness & Accuracy' },
+      { k: 'quality_t1t2_comp_acc', title: 'T1-T2 Comprehensiveness & Accuracy' },
+    ];
+    qhSections.forEach(s => {
+      const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[s.k] : null;
+      if (d && d.length > 0) {
+        html += '<div class="section-label" style="margin-top:36px">' + s.title + '</div>';
+        html += buildTableHtml(d, QUALITY_COMP_COLS, true);
+      }
+    });
+  }
+
   if (key === 'quality_efficiency') {
     html = '';
     const qSections = [
