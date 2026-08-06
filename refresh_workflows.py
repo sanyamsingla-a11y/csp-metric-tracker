@@ -5639,14 +5639,49 @@ EARNINGS_SUBTABLE_QUERIES = {
     "earnings_raw":                   "earnings_raw_amounts.sql",
     "earnings_raw_tds_hygiene":       "earnings_raw_tds_hygiene.sql",
     "earnings_tds_hop_rates":         "earnings_tds_hop_rates.sql",
+    "earnings_mode_success_rate":     "earnings_mode_success_rate.sql",
+    "earnings_raw_mode_success":      "earnings_raw_mode_success.sql",
 }
 
 
-def refresh():
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M IST")
-    data = {}
+def _build_all_file_queries():
+    """Return dict of all file-based query keys -> filenames (earnings subtables + ISP)."""
+    d = dict(EARNINGS_SUBTABLE_QUERIES)
+    d.update({
+        "isp_health_obligation_creation_rate": "isp_health_obligation_creation_rate.sql",
+        "isp_raw_ticket_creation": "isp_raw_ticket_creation.sql",
+    })
+    return d
 
+
+def refresh(only_keys=None):
+    """Refresh workflow data. If only_keys is set, only run those queries and merge into existing data."""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M IST")
+
+    # ── Load existing data if doing a partial refresh ──
+    out_path = os.path.join(DIR, "workflow_data.js")
+    if only_keys:
+        try:
+            with open(out_path) as f:
+                content = f.read()
+            # Extract JSON from: const WORKFLOW_DATA = {...};
+            start = content.index("const WORKFLOW_DATA = ") + len("const WORKFLOW_DATA = ")
+            end = content.rindex(";")
+            data = json.loads(content[start:end])
+            print(f"  Loaded existing data ({len(data)} keys)")
+        except Exception as e:
+            print(f"  Could not load existing data ({e}), doing full refresh")
+            only_keys = None
+            data = {}
+    else:
+        data = {}
+
+    all_file_queries = _build_all_file_queries()
+
+    # ── Inline QUERIES ──
     for key, sql in QUERIES.items():
+        if only_keys and key not in only_keys:
+            continue
         print(f"  Querying {key}...")
         try:
             rows = mb_native(sql)
@@ -5656,35 +5691,23 @@ def refresh():
             print(f"  ERROR on {key}: {e}")
             data[key] = []
 
-    # ── Earnings health: run 8 queries and merge rows into one list ──
-    earnings_health_rows = []
-    for key, filename in EARNINGS_HEALTH_QUERIES:
-        print(f"  Querying earnings: {filename}...")
-        try:
-            rows = mb_native(_load_sql(filename))
-            earnings_health_rows.extend(rows)
-            print(f"  -> {len(rows)} rows")
-        except Exception as e:
-            print(f"  ERROR on {filename}: {e}")
-    data["earnings_health"] = earnings_health_rows
+    # ── Earnings health: run queries and merge rows into one list ──
+    if not only_keys or "earnings_health" in only_keys:
+        earnings_health_rows = []
+        for key, filename in EARNINGS_HEALTH_QUERIES:
+            print(f"  Querying earnings: {filename}...")
+            try:
+                rows = mb_native(_load_sql(filename))
+                earnings_health_rows.extend(rows)
+                print(f"  -> {len(rows)} rows")
+            except Exception as e:
+                print(f"  ERROR on {filename}: {e}")
+        data["earnings_health"] = earnings_health_rows
 
-    # ── Earnings sub-tables (sync breakup + raw amounts) ────────────
-    for key, filename in EARNINGS_SUBTABLE_QUERIES.items():
-        print(f"  Querying earnings: {filename}...")
-        try:
-            rows = mb_native(_load_sql(filename))
-            data[key] = rows
-            print(f"  -> {len(rows)} rows")
-        except Exception as e:
-            print(f"  ERROR on {filename}: {e}")
-            data[key] = []
-
-    # ── ISP file-based queries ──────────────────────────────────────
-    ISP_FILE_QUERIES = {
-        "isp_health_obligation_creation_rate": "isp_health_obligation_creation_rate.sql",
-        "isp_raw_ticket_creation": "isp_raw_ticket_creation.sql",
-    }
-    for key, filename in ISP_FILE_QUERIES.items():
+    # ── File-based queries (earnings subtables + ISP) ────────────
+    for key, filename in all_file_queries.items():
+        if only_keys and key not in only_keys:
+            continue
         print(f"  Querying {key}...")
         try:
             rows = mb_native(_load_sql(filename))
@@ -5708,13 +5731,20 @@ def refresh():
     out += f"const WORKFLOW_REFRESH_TS = {json.dumps(ts)};\n"
     out += f"const WORKFLOW_DATA = {json.dumps(data, indent=2, default=str)};\n"
 
-    out_path = os.path.join(DIR, "workflow_data.js")
     with open(out_path, "w") as f:
         f.write(out)
     print(f"Wrote {out_path}")
 
 
 if __name__ == "__main__":
-    print("Refreshing workflow dashboard data...")
-    refresh()
+    import sys
+    only = None
+    for arg in sys.argv[1:]:
+        if arg.startswith("--only="):
+            only = set(arg[len("--only="):].split(","))
+    if only:
+        print(f"Refreshing only: {', '.join(sorted(only))}")
+    else:
+        print("Refreshing workflow dashboard data...")
+    refresh(only_keys=only)
     print("Done.")
