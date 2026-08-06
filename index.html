@@ -401,12 +401,6 @@ function loadMetric(key, wfName, type) {
       html += '<div class="section-label">Timely Credit Rate by Event Type (%)</div>';
       html += buildTableHtml(tcCredit, COLS_EARNINGS, true);
     }
-    const modeRate = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['earnings_mode_success_rate'] : null;
-    if (modeRate && modeRate.length > 0) {
-      const MODE_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','30D Avg','30D Median','30D P90'];
-      html += '<div class="section-label">Payment Mode-Level Success Rate (%)</div>';
-      html += buildTableHtml(modeRate, MODE_COLS, true);
-    }
   }
 
   if (key === 'b2i_health') {

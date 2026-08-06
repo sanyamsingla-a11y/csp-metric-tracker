@@ -5628,6 +5628,7 @@ EARNINGS_HEALTH_QUERIES = [
     ("earnings_health",               "earnings_q8_i4_notification.sql"),
     ("earnings_health",               "earnings_q13_overall_payment_success.sql"),
     ("earnings_health",               "earnings_q14_success_by_attempt.sql"),
+    ("earnings_health",               "earnings_mode_success_rate.sql"),
 ]
 
 EARNINGS_SUBTABLE_QUERIES = {
@@ -5639,7 +5640,6 @@ EARNINGS_SUBTABLE_QUERIES = {
     "earnings_raw":                   "earnings_raw_amounts.sql",
     "earnings_raw_tds_hygiene":       "earnings_raw_tds_hygiene.sql",
     "earnings_tds_hop_rates":         "earnings_tds_hop_rates.sql",
-    "earnings_mode_success_rate":     "earnings_mode_success_rate.sql",
     "earnings_raw_mode_success":      "earnings_raw_mode_success.sql",
 }
 
