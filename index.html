@@ -297,7 +297,7 @@ function loadMetric(key, wfName, type) {
 
   const rows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[key] : null;
 
-  const hasSubtables = key === 'isp_recharge_raw' || key === 'service_tickets_raw' || key === 'pickup_tickets_raw' || key === 'quality_efficiency';
+  const hasSubtables = key === 'isp_recharge_raw' || key === 'service_tickets_raw' || key === 'pickup_tickets_raw' || key === 'quality_efficiency' || key === 'quality_health';
   if ((!rows || rows.length === 0) && !hasSubtables) {
     document.getElementById('mainBody').innerHTML =
       '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
