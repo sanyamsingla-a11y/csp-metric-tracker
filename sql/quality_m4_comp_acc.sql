@@ -69,9 +69,9 @@ daily_metrics AS (
             COUNT(CASE
                 WHEN d.dms_state =
                     CASE
-                        WHEN d.dms_count < 25  THEN 'INSUFFICIENT_DATA'
-                        WHEN d.dms_avg >= 4.3  THEN 'PASS'
-                        ELSE                        'FAIL'
+                        WHEN COALESCE(c.crr_count, 0) < 25 THEN 'INSUFFICIENT_DATA'
+                        WHEN c.crr_avg >= 4.3              THEN 'PASS'
+                        ELSE                                    'FAIL'
                     END
                 THEN 1 END)
             / NULLIF(COUNT(*), 0), 1)                                   AS a3
@@ -82,10 +82,10 @@ daily_metrics AS (
 ),
 
 unpivoted AS (
-    SELECT dt, 'C1: M4 Completeness % (eligible csps→snapshot)'     AS metric, 1 AS sort_key, c1 AS val FROM daily_metrics UNION ALL
-    SELECT dt, 'A1: M4 AVG_RATING_COUNT Match % (computed vs snapshot)'   AS metric, 2,            a1        FROM daily_metrics UNION ALL
-    SELECT dt, 'A2: M4 AVG_RATING Match % (computed vs snapshot)'         AS metric, 3,            a2        FROM daily_metrics UNION ALL
-    SELECT dt, 'A3: M4 STATE Match % (computed vs snapshot state)' AS metric, 4,            a3        FROM daily_metrics
+    SELECT dt, 'C1: M4 CRR→DMS Coverage %'     AS metric, 1 AS sort_key, c1 AS val FROM daily_metrics UNION ALL
+    SELECT dt, 'A1: AVG_RATING_COUNT Match %'   AS metric, 2,            a1        FROM daily_metrics UNION ALL
+    SELECT dt, 'A2: AVG_RATING Match %'         AS metric, 3,            a2        FROM daily_metrics UNION ALL
+    SELECT dt, 'A3: AVG_RATING_STATE Correct %' AS metric, 4,            a3        FROM daily_metrics
 )
 
 SELECT
