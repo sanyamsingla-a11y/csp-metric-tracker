@@ -2287,82 +2287,111 @@ ORDER BY metric
 QUERIES["isp_raw_recharge_overview"] = r"""
 WITH base AS (
     SELECT
-        DATE(created_at)                          AS dt,
-        COUNT(DISTINCT execution_candidate_id)    AS val
+        DATE(CONVERT_TIMEZONE('Asia/Kolkata', created_at)) AS dt,
+        COUNT(DISTINCT execution_candidate_id)             AS val
     FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RECHARGE_EXECUTION_CANDIDATES
     WHERE _fivetran_active = TRUE
-      AND DATE(created_at) >= DATEADD(day, -30, CURRENT_DATE())
+      AND DATE(CONVERT_TIMEZONE('Asia/Kolkata', created_at)) >= DATEADD(day, -30, CURRENT_DATE())
     GROUP BY 1
 ),
+
 obligations AS (
     SELECT
-        DATE(created_at)              AS dt,
+        DATE(CONVERT_TIMEZONE('Asia/Kolkata', created_at)) AS dt,
         reason,
-        COUNT(DISTINCT connection_id) AS val
+        COUNT(DISTINCT connection_id)                      AS val
     FROM CSP_CUSTOMER_ACCESS_SERVICE_CSP_CUSTOMER_ACCESS_SERVICE.SUPPLY_RECHARGE_OBLIGATIONS
     WHERE _fivetran_active
-      AND created_at >= DATEADD(day, -30, CURRENT_DATE())
+      AND DATE(CONVERT_TIMEZONE('Asia/Kolkata', created_at)) >= DATEADD(day, -30, CURRENT_DATE())
     GROUP BY 1, 2
 ),
+
 recharges AS (
     SELECT
-        DATE(UPDATED_AT)                          AS dt,
-        COUNT(DISTINCT EXECUTION_CANDIDATE_ID)    AS total_recharges
+        DATE(CONVERT_TIMEZONE('Asia/Kolkata', updated_at)) AS dt,
+        COUNT(DISTINCT execution_candidate_id)             AS total_recharges
     FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RECHARGE_EXECUTION_CANDIDATES
     WHERE commission_status = 'DISBURSED'
-      AND DATE(UPDATED_AT) >= CURRENT_DATE() - 31
+      AND DATE(CONVERT_TIMEZONE('Asia/Kolkata', updated_at)) >= DATEADD(day, -31, CURRENT_DATE())
     GROUP BY 1
 ),
+
 payouts AS (
     SELECT
-        DATE(c.created_at)                         AS dt,
-        COUNT(DISTINCT a.EXECUTION_CANDIDATE_ID)   AS paid_out,
-        ROUND(SUM(c.amount) / 100.0, 2)            AS paid_amount_inr
+        DATE(CONVERT_TIMEZONE('Asia/Kolkata', c.created_at)) AS dt,
+        COUNT(DISTINCT a.execution_candidate_id)             AS paid_out,
+        ROUND(SUM(c.amount) / 100.0, 2)                      AS paid_amount_inr
     FROM CSP_COMPENSATION_SERVICE_CSP_COMPENSATION_SERVICE.ENTITLEMENT_LEDGER_ENTRIES b
     LEFT JOIN PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RECHARGE_EXECUTION_CANDIDATES a
-        ON a.EXECUTION_CANDIDATE_ID = b.RECHARGE_EVENT_REF AND a._fivetran_active
+        ON a.execution_candidate_id = b.recharge_event_ref
+       AND a._fivetran_active
     LEFT JOIN PROD_DB.CSP_PAYMENT_SETTLEMENT_SERVICE_CSP_PAYMENT_SETTLEMENT_SERVICE.WALLET_LEDGER_ENTRIES c
         ON c.reference_id = b.recharge_event_ref
-    WHERE DATE(c.created_at) >= CURRENT_DATE() - 31
+    WHERE DATE(CONVERT_TIMEZONE('Asia/Kolkata', c.created_at)) >= DATEADD(day, -31, CURRENT_DATE())
       AND c.entry_type = 'BASE_PAYOUT'
       AND c.reference_id NOT ILIKE '%INSTALL%'
     GROUP BY 1
 ),
+
 daily AS (
     SELECT
         r.dt,
-        r.total_recharges   AS total_val,
-        p.paid_out          AS paid_val,
-        p.paid_amount_inr   AS amount_val
+        r.total_recharges AS total_val,
+        p.paid_out         AS paid_val,
+        p.paid_amount_inr  AS amount_val
     FROM recharges r
-    LEFT JOIN payouts p ON p.dt = r.dt
+    LEFT JOIN payouts p
+        ON p.dt = r.dt
 ),
+
 pivoted AS (
-    SELECT 1 AS sort_order, 'Recharge Tickets Created' AS metric, dt, val        FROM base
+    SELECT 1 AS sort_order, 'Recharge Tickets Created' AS metric, dt, val
+    FROM base
+
     UNION ALL
-    SELECT 2,               'Obligation: PROACTIVE',              dt, val        FROM obligations WHERE reason = 'PROACTIVE'
+
+    SELECT 2, 'Obligation: PROACTIVE', dt, val
+    FROM obligations
+    WHERE reason = 'PROACTIVE'
+
     UNION ALL
-    SELECT 3,               'Obligation: REACTIVE',               dt, val        FROM obligations WHERE reason = 'REACTIVE'
+
+    SELECT 3, 'Obligation: REACTIVE', dt, val
+    FROM obligations
+    WHERE reason = 'REACTIVE'
+
     UNION ALL
-    SELECT 4,               'Total Recharges (Disbursed)',         dt, total_val  FROM daily
+
+    SELECT 4, 'Total Recharges (Disbursed)', dt, total_val
+    FROM daily
+
     UNION ALL
-    SELECT 5,               'CSPs Paid Out',                       dt, paid_val   FROM daily
+
+    SELECT 5, 'CSPs Paid Out', dt, paid_val
+    FROM daily
+
     UNION ALL
-    SELECT 6,               'Paid Amount (INR)',                   dt, amount_val FROM daily
+
+    SELECT 6, 'Paid Amount (INR)', dt, amount_val
+    FROM daily
 )
+
 SELECT
     metric AS "Metric",
-    MAX(CASE WHEN dt = DATEADD(day,-1,CURRENT_DATE()) THEN val END) AS "T-1",
-    MAX(CASE WHEN dt = DATEADD(day,-2,CURRENT_DATE()) THEN val END) AS "T-2",
-    MAX(CASE WHEN dt = DATEADD(day,-3,CURRENT_DATE()) THEN val END) AS "T-3",
-    MAX(CASE WHEN dt = DATEADD(day,-4,CURRENT_DATE()) THEN val END) AS "T-4",
-    MAX(CASE WHEN dt = DATEADD(day,-5,CURRENT_DATE()) THEN val END) AS "T-5",
-    MAX(CASE WHEN dt = DATEADD(day,-6,CURRENT_DATE()) THEN val END) AS "T-6",
-    MAX(CASE WHEN dt = DATEADD(day,-7,CURRENT_DATE()) THEN val END) AS "T-7",
-    MAX(CASE WHEN dt = DATEADD(day,-8,CURRENT_DATE()) THEN val END) AS "T-8",
-    ROUND(AVG(val),1)                                                   AS "Mean",
-    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1)           AS "Median",
-    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1)           AS "P90"
+
+    MAX(CASE WHEN dt = DATEADD(day, -1, CURRENT_DATE()) THEN val END) AS "T-1",
+    MAX(CASE WHEN dt = DATEADD(day, -2, CURRENT_DATE()) THEN val END) AS "T-2",
+    MAX(CASE WHEN dt = DATEADD(day, -3, CURRENT_DATE()) THEN val END) AS "T-3",
+    MAX(CASE WHEN dt = DATEADD(day, -4, CURRENT_DATE()) THEN val END) AS "T-4",
+    MAX(CASE WHEN dt = DATEADD(day, -5, CURRENT_DATE()) THEN val END) AS "T-5",
+    MAX(CASE WHEN dt = DATEADD(day, -6, CURRENT_DATE()) THEN val END) AS "T-6",
+    MAX(CASE WHEN dt = DATEADD(day, -7, CURRENT_DATE()) THEN val END) AS "T-7",
+    MAX(CASE WHEN dt = DATEADD(day, -8, CURRENT_DATE()) THEN val END) AS "T-8",
+
+    ROUND(AVG(val), 1)                                         AS "30D Avg",
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val), 1) AS "30D Median",
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1) AS "30D P90"
+
 FROM pivoted
 GROUP BY sort_order, metric
 ORDER BY sort_order

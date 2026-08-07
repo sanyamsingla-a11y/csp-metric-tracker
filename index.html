@@ -468,7 +468,7 @@ function loadMetric(key, wfName, type) {
     const rechargeOverview = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['isp_raw_recharge_overview'] : null;
     if (rechargeOverview && rechargeOverview.length > 0) {
       html += '<div class="section-label" style="margin-top:36px">Recharge Overview</div>';
-      html += buildTableHtml(rechargeOverview, ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'], false);
+      html += buildTableHtml(rechargeOverview, ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','30D Avg','30D Median','30D P90'], false);
     }
   }
 
