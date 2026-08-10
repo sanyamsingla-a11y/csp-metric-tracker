@@ -1637,7 +1637,7 @@ rates_long AS (
     UNION ALL SELECT 4,  'WA Delivery Rate',                                booking_date, wa_delivery_rate       FROM rates_joined
     UNION ALL SELECT 5,  'Drilldown Open Rate',                             booking_date, drilldown_open_rate    FROM rates_joined
     UNION ALL SELECT 6,  'Task Open Rate',                                  booking_date, task_open_rate         FROM rates_joined
-    UNION ALL SELECT 7,  'Response Rate ((Proposed+Declined)/Task Open)',   booking_date, response_rate          FROM rates_joined
+    UNION ALL SELECT 7,  'Response Rate ((Assigned+Declined)/Task Open)',   booking_date, response_rate          FROM rates_joined
     UNION ALL SELECT 8,  'Task Decline Rate',                               booking_date, task_decline_rate      FROM rates_joined
     UNION ALL SELECT 9,  'P41 Timeout Rate (L2: /Task Created)',            booking_date, p41_rate_l2            FROM rates_joined
     UNION ALL SELECT 10, 'Technician Assignment Rate',                      booking_date, tech_assigned_rate     FROM rates_joined
