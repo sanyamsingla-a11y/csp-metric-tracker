@@ -1399,7 +1399,7 @@ rates_joined AS (
         fpn_action_taken   * 1.0 / NULLIF(fpn_delivered, 0)      AS fpn_action_rate,
         drilldown_open     * 1.0 / NULLIF(total_candidates, 0)   AS drilldown_open_rate,
         install_task_open  * 1.0 / NULLIF(total_candidates, 0)   AS task_open_rate,
-        (slot_proposed + slot_declined) * 1.0 / NULLIF(install_task_open, 0) AS response_rate,
+        (tech_assigned + slot_declined) * 1.0 / NULLIF(install_task_open, 0) AS response_rate,
         slot_declined      * 1.0 / NULLIF(install_task_open, 0)  AS task_decline_rate,
         p41_timeout        * 1.0 / NULLIF(total_candidates, 0)   AS p41_rate_l2,
         slot_proposed      * 1.0 / NULLIF(install_task_open, 0)  AS slot_proposed_rate,
