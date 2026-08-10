@@ -421,32 +421,15 @@ function loadMetric(key, wfName, type) {
     // Install summary (bookings → installed + TAT) on top
     const installSummary = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['b2i_install_summary'] : null;
     if (installSummary && installSummary.length > 0) {
-      let summaryHtml = '<div class="section-label">Install Summary</div>' +
-             buildTableHtml(installSummary, COLS_RATES, false);
-      // Resolution TAT by subtype — between Install Summary and Conversion Rates
-      const resTat = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['service_tickets_resolution_tat'] : null;
-      if (resTat && resTat.length > 0) {
-        const TAT_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','AVERAGE','MEDIAN','P90'];
-        const subtypes = [];
-        resTat.forEach(r => { const s = r['Subtype']; if (s && subtypes.indexOf(s) === -1) subtypes.push(s); });
-        summaryHtml += '<div class="section-label" style="margin-top:36px">Resolution TAT by Subtype</div>';
-        subtypes.forEach(subtype => {
-          const sRows = resTat.filter(r => r['Subtype'] === subtype).map(r => {
-            const copy = Object.assign({}, r);
-            delete copy['Subtype'];
-            return copy;
-          });
-          summaryHtml += '<div class="section-label" style="margin-top:18px;font-size:0.85em">' + subtype + '</div>';
-          summaryHtml += buildTableHtml(sRows, TAT_COLS, false);
-        });
-      }
-      html = summaryHtml + '<div class="section-label" style="margin-top:36px">Conversion Rates (%)</div>' + html;
+      html = '<div class="section-label">Install Summary</div>' +
+             buildTableHtml(installSummary, COLS_RATES, false) +
+             '<div class="section-label" style="margin-top:36px">Conversion Rates (%)</div>' + html;
     }
     // Candidate funnel rates
     const candidateFunnel = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['b2i_candidate_funnel'] : null;
     if (candidateFunnel && candidateFunnel.length > 0) {
       html += '<div class="section-label">Candidate Funnel Rates (%)</div>';
-      html += buildTableHtml(candidateFunnel, COLS_RATES, true);
+      html += buildTableHtml(candidateFunnel, COLS_RATES, true, null, false);
     }
     const counts = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['b2i_efficiency_counts'] : null;
     if (counts && counts.length > 0) {
