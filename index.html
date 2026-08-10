@@ -306,6 +306,7 @@ function loadMetric(key, wfName, type) {
 
   const isEarnings = key.startsWith('earnings_');
   const isEarningsRaw = key === 'earnings_raw';
+  const isHealthView = key.endsWith('_health') || key.endsWith('_health_rates') || key === 'device_ordering_health';
   const isRates = (key.endsWith('_efficiency') && key !== 'pickup_tickets_efficiency') || key.endsWith('_health_rates') || (isEarnings && !isEarningsRaw) || key === 'device_ordering_health' || key === 'service_tickets_health' || key === 'pickup_tickets_health';
   const cols = isEarnings ? COLS_EARNINGS : (key.endsWith('_funnel') || key === 'b2i_health') ? COLS_FUNNEL : isRates ? COLS_RATES : COLS_HEALTH;
   const body = document.getElementById('mainBody');
@@ -319,7 +320,7 @@ function loadMetric(key, wfName, type) {
   if (key === 'pickup_tickets_efficiency' && rows && rows.length > 0) {
     html = '<div class="section-label">PUT Closure TAT</div>' + buildTableHtml(rows, cols, false);
   } else if (rows && rows.length > 0) {
-    html = buildTableHtml(rows, cols, isRates, stClickable);
+    html = buildTableHtml(rows, cols, isRates, stClickable, isHealthView);
   }
 
   if (key === 'earnings_raw') {
@@ -367,7 +368,7 @@ function loadMetric(key, wfName, type) {
       const clRow = clData.find(r => (r['Metric'] || '').indexOf('% Closed within 2h') !== -1);
       if (clRow) combined = combined.concat([clRow]);
     }
-    html = buildTableHtml(combined, cols, isRates);
+    html = buildTableHtml(combined, cols, isRates, null, isHealthView);
     const absCounts = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['put_health_absolute_counts'] : null;
     if (absCounts && absCounts.length > 0) {
       html += '<div class="section-label" style="margin-top:36px">Absolute Counts</div>';
@@ -420,9 +421,26 @@ function loadMetric(key, wfName, type) {
     // Install summary (bookings → installed + TAT) on top
     const installSummary = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['b2i_install_summary'] : null;
     if (installSummary && installSummary.length > 0) {
-      html = '<div class="section-label">Install Summary</div>' +
-             buildTableHtml(installSummary, COLS_RATES, false) +
-             '<div class="section-label">Conversion Rates (%)</div>' + html;
+      let summaryHtml = '<div class="section-label">Install Summary</div>' +
+             buildTableHtml(installSummary, COLS_RATES, false);
+      // Resolution TAT by subtype — between Install Summary and Conversion Rates
+      const resTat = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['service_tickets_resolution_tat'] : null;
+      if (resTat && resTat.length > 0) {
+        const TAT_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','AVERAGE','MEDIAN','P90'];
+        const subtypes = [];
+        resTat.forEach(r => { const s = r['Subtype']; if (s && subtypes.indexOf(s) === -1) subtypes.push(s); });
+        summaryHtml += '<div class="section-label" style="margin-top:36px">Resolution TAT by Subtype</div>';
+        subtypes.forEach(subtype => {
+          const sRows = resTat.filter(r => r['Subtype'] === subtype).map(r => {
+            const copy = Object.assign({}, r);
+            delete copy['Subtype'];
+            return copy;
+          });
+          summaryHtml += '<div class="section-label" style="margin-top:18px;font-size:0.85em">' + subtype + '</div>';
+          summaryHtml += buildTableHtml(sRows, TAT_COLS, false);
+        });
+      }
+      html = summaryHtml + '<div class="section-label" style="margin-top:36px">Conversion Rates (%)</div>' + html;
     }
     // Candidate funnel rates
     const candidateFunnel = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['b2i_candidate_funnel'] : null;
@@ -706,7 +724,8 @@ const METRIC_RENAME = {
   'WITHDRAWAL': 'CSP Wallet Withdrawals',
   '% Closed within 2h': 'Recharge Done → PUT Closed Within 2h',
 };
-function buildTableHtml(rows, cols, pct, clickable) {
+function buildTableHtml(rows, cols, pct, clickable, redHighlight) {
+  if (redHighlight === undefined) redHighlight = pct;
   let html = '<div class="table-wrap"><table><thead><tr>';
   html += '<th>Metric</th>';
   cols.forEach(c => {
@@ -729,7 +748,7 @@ function buildTableHtml(rows, cols, pct, clickable) {
     cols.forEach(c => {
       const v = row[c] ?? row[c.toUpperCase()] ?? '';
       const numV = parseFloat(v);
-      const redStyle = (pct && !isNaN(numV) && numV < 99) ? ' style="color:#e53e3e;font-weight:600"' : '';
+      const redStyle = (redHighlight && !isNaN(numV) && numV < 99) ? ' style="color:#e53e3e;font-weight:600"' : '';
       html += '<td' + redStyle + '>' + fmt(v) + (pct && v !== null && v !== undefined && v !== '' ? '%' : '') + '</td>';
     });
     html += '</tr>';
