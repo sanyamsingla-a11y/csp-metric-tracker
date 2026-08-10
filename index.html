@@ -417,11 +417,23 @@ function loadMetric(key, wfName, type) {
   }
 
   if (key === 'b2i_efficiency') {
+    // Install summary (bookings → installed + TAT) on top
+    const installSummary = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['b2i_install_summary'] : null;
+    if (installSummary && installSummary.length > 0) {
+      html = '<div class="section-label">Install Summary</div>' +
+             buildTableHtml(installSummary, COLS_RATES, false) +
+             '<div class="section-label">Conversion Rates (%)</div>' + html;
+    }
+    // Candidate funnel rates
+    const candidateFunnel = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['b2i_candidate_funnel'] : null;
+    if (candidateFunnel && candidateFunnel.length > 0) {
+      html += '<div class="section-label">Candidate Funnel Rates (%)</div>';
+      html += buildTableHtml(candidateFunnel, COLS_RATES, true);
+    }
     const counts = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['b2i_efficiency_counts'] : null;
     if (counts && counts.length > 0) {
-      html = buildTableHtml(counts, COLS_RATES, false) +
-             '<div class="section-label">Conversion Rates (%)</div>' +
-             html;
+      html += '<div class="section-label">Candidate Counts</div>';
+      html += buildTableHtml(counts, COLS_RATES, false);
     }
     const sla = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['b2i_sla'] : null;
     if (sla && sla.length > 0) {

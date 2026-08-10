@@ -986,6 +986,214 @@ GROUP BY sort_ord, metric
 ORDER BY sort_ord
 """
 
+# ── B2I Install Funnel Summary (bookings → installed + TAT) ──────
+
+QUERIES["b2i_install_summary"] = r"""
+WITH
+bookings_base AS (
+  SELECT CONNECTION_ID, MOBILE,
+         TO_DATE(BOOKING_CONFIRM_DATE)  AS booking_date,
+         BOOKING_CONFIRM_DATE           AS booking_ts
+  FROM PROD_DB.PUBLIC.COMPANY_B_CONNECTION_BOOKING_ENRICHED
+  WHERE TO_DATE(BOOKING_CONFIRM_DATE) BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE
+),
+candidates AS (
+  SELECT e.connection_id, e.execution_candidate_id, e.current_state, e.updated_at
+  FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES e
+  INNER JOIN bookings_base bb ON bb.CONNECTION_ID = e.connection_id
+  WHERE e._fivetran_active
+),
+installed_conns AS (
+  SELECT DISTINCT connection_id FROM candidates WHERE current_state = 'CONNECTION_ACTIVE'
+),
+single_candidate_conns AS (
+  SELECT connection_id FROM candidates GROUP BY connection_id HAVING COUNT(DISTINCT execution_candidate_id) = 1
+),
+first_csp_installed AS (
+  SELECT c.connection_id, c.execution_candidate_id, c.updated_at AS installed_at
+  FROM candidates c
+  JOIN installed_conns ic ON ic.connection_id = c.connection_id
+  JOIN single_candidate_conns sc ON sc.connection_id = c.connection_id
+  WHERE c.current_state = 'CONNECTION_ACTIVE'
+),
+first_csp_tat AS (
+  SELECT bb.booking_date, bb.connection_id, DATEDIFF('hour', bb.booking_ts, fc.installed_at) AS tat_hrs
+  FROM first_csp_installed fc
+  JOIN bookings_base bb ON bb.connection_id = fc.connection_id
+),
+daily_counts AS (
+  SELECT bb.booking_date AS dt,
+    COUNT(DISTINCT bb.MOBILE) AS total_bookings,
+    COUNT(DISTINCT CASE WHEN ic.connection_id IS NOT NULL THEN bb.connection_id END) AS installed,
+    COUNT(DISTINCT CASE WHEN fc.connection_id IS NOT NULL THEN bb.connection_id END) AS first_csp_installed
+  FROM bookings_base bb
+  LEFT JOIN installed_conns ic ON ic.connection_id = bb.connection_id
+  LEFT JOIN first_csp_installed fc ON fc.connection_id = bb.connection_id
+  GROUP BY 1
+),
+daily_tat AS (
+  SELECT booking_date AS dt,
+    ROUND(AVG(tat_hrs),1) AS avg_hrs,
+    ROUND(MEDIAN(tat_hrs),1) AS median_hrs,
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY tat_hrs),1) AS p90_hrs
+  FROM first_csp_tat
+  GROUP BY 1
+)
+SELECT sort_ord, metric_name,
+  MAX(CASE WHEN dt = CURRENT_DATE - 1 THEN val END) AS "T-1",
+  MAX(CASE WHEN dt = CURRENT_DATE - 2 THEN val END) AS "T-2",
+  MAX(CASE WHEN dt = CURRENT_DATE - 3 THEN val END) AS "T-3",
+  MAX(CASE WHEN dt = CURRENT_DATE - 4 THEN val END) AS "T-4",
+  MAX(CASE WHEN dt = CURRENT_DATE - 5 THEN val END) AS "T-5",
+  MAX(CASE WHEN dt = CURRENT_DATE - 6 THEN val END) AS "T-6",
+  MAX(CASE WHEN dt = CURRENT_DATE - 7 THEN val END) AS "T-7",
+  MAX(CASE WHEN dt = CURRENT_DATE - 8 THEN val END) AS "T-8",
+  ROUND(AVG(CASE WHEN dt BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1 THEN val::FLOAT END),1) AS "Mean",
+  MEDIAN(CASE WHEN dt BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1 THEN val::FLOAT END) AS "Median"
+FROM (
+        SELECT 0, '# Bookings Confirmed',              dt, total_bookings      FROM daily_counts
+  UNION ALL SELECT 1, '# Installed',                    dt, installed           FROM daily_counts
+  UNION ALL SELECT 2, '# First-CSP Installed (1 cand)', dt, first_csp_installed FROM daily_counts
+  UNION ALL SELECT 3, 'TAT: Avg hrs-First Cycle Install',                   dt, avg_hrs            FROM daily_tat
+  UNION ALL SELECT 4, 'TAT: Median hrs-First Cycle Install',                dt, median_hrs         FROM daily_tat
+  UNION ALL SELECT 5, 'TAT: P90 hrs-First Cycle Install',                   dt, p90_hrs            FROM daily_tat
+) m (sort_ord, metric_name, dt, val)
+GROUP BY sort_ord, metric_name
+ORDER BY sort_ord
+LIMIT 10000
+"""
+
+# ── B2I Candidate Funnel Rates ───────────────────────────────────
+
+QUERIES["b2i_candidate_funnel"] = r"""
+WITH bookings_base AS (
+    SELECT CONNECTION_ID, DATE(BOOKING_CONFIRM_DATE) AS booking_date
+    FROM PROD_DB.PUBLIC.COMPANY_B_CONNECTION_BOOKING_ENRICHED
+    WHERE DATE(BOOKING_CONFIRM_DATE) BETWEEN CURRENT_DATE - 10 AND CURRENT_DATE - 1
+),
+all_candidates AS (
+    SELECT
+        iec.EXECUTION_CANDIDATE_ID, iec.CONNECTION_ID, b.booking_date,
+        iec.EXECUTOR_ID, iec.CURRENT_STATE, iec.COMPLETED_STEP,
+        iec.OTP_VERIFIED, iec.IS_SELF_ASSIGNED
+    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES iec
+    JOIN bookings_base b ON b.CONNECTION_ID = iec.CONNECTION_ID
+    WHERE iec._FIVETRAN_ACTIVE = TRUE
+),
+ct_events AS (
+    SELECT
+        JSON_EXTRACT_PATH_TEXT(PROPERTIES, 'execution_id') AS execution_id,
+        MAX(CASE WHEN EVENT_NAME = 'fpn_delivered'
+              AND JSON_EXTRACT_PATH_TEXT(PROPERTIES,'pn_type') = 'ES_INSTALL_CANDIDATE_CREATED'
+              THEN 1 ELSE 0 END) AS fpn_delivered,
+        MAX(CASE WHEN EVENT_NAME = 'install_candidate_opened' THEN 1 ELSE 0 END) AS install_candidate_opened
+    FROM PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA
+    WHERE JSON_EXTRACT_PATH_TEXT(PROPERTIES, 'execution_id') IS NOT NULL
+      AND JSON_EXTRACT_PATH_TEXT(PROPERTIES, 'execution_id') != ''
+    GROUP BY 1
+),
+cand_csp AS (
+    SELECT DISTINCT
+        ac.EXECUTION_CANDIDATE_ID AS execution_candidate_id,
+        ca.MOBILE_NUMBER AS csp_mobile
+    FROM all_candidates ac
+    JOIN PROD_DB.CSP_DEMAND_ALLOCATION_SERVICE_CSP_DEMAND_ALLOCATION_SERVICE.CONNECTION_ALLOCATIONS a
+        ON a.CONNECTION_ID = ac.CONNECTION_ID
+        AND a.ALLOCATION_STATE IN ('ASSIGNED','ACCEPTED','ACTIVE','RELEASED')
+    JOIN PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT ca
+        ON ca.csp_id = a.CSP_ID
+),
+cand_creation AS (
+    SELECT execution_candidate_id,
+        MIN(_FIVETRAN_START) AS cand_created_at
+    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES
+    WHERE execution_candidate_id IN (SELECT EXECUTION_CANDIDATE_ID FROM all_candidates)
+    GROUP BY 1
+),
+cand_window AS (
+    SELECT
+        cc.execution_candidate_id,
+        cc.csp_mobile,
+        cr.cand_created_at,
+        LEAD(cr.cand_created_at) OVER (
+            PARTITION BY cc.csp_mobile ORDER BY cr.cand_created_at
+        ) AS next_cand_at
+    FROM cand_csp cc
+    JOIN cand_creation cr ON cc.execution_candidate_id = cr.execution_candidate_id
+),
+wa_attributed AS (
+    SELECT cw.execution_candidate_id, wr.event_type
+    FROM PROD_DB.PUBLIC.GUPSHUP_EVENTS wr
+    JOIN cand_window cw
+        ON RIGHT(cw.csp_mobile, 10) = RIGHT(wr.DEST_ADDR, 10)
+        AND wr.timestamp >= cw.cand_created_at
+        AND (cw.next_cand_at IS NULL OR wr.timestamp < cw.next_cand_at)
+    WHERE wr.HSM_TEMPLATE_ID = '8759388'
+      AND wr.event_type = 'DELIVERED'
+      AND DATE(wr.timestamp) >= CURRENT_DATE - 10
+),
+wa_cand AS (
+    SELECT execution_candidate_id, MAX(1) AS wa_delivered
+    FROM wa_attributed
+    GROUP BY 1
+),
+candidate_level AS (
+    SELECT
+        ac.booking_date AS dt,
+        CASE WHEN COALESCE(ct.fpn_delivered,0)=1
+              OR  COALESCE(ct.install_candidate_opened,0)=1
+              OR  COALESCE(wc.wa_delivered,0)=1 THEN 1 ELSE 0 END AS install_task_open,
+        CASE WHEN ac.CURRENT_STATE = 'DECLINED' THEN 1 ELSE 0 END AS slot_declined,
+        CASE WHEN ac.EXECUTOR_ID IS NOT NULL THEN 1 ELSE 0 END AS tech_assigned,
+        CASE WHEN COALESCE(ac.COMPLETED_STEP,0) >= 1 THEN 1 ELSE 0 END AS step_selfie,
+        CASE WHEN ac.OTP_VERIFIED = TRUE THEN 1 ELSE 0 END AS installed
+    FROM all_candidates ac
+    LEFT JOIN ct_events ct ON ct.execution_id = ac.EXECUTION_CANDIDATE_ID
+    LEFT JOIN wa_cand wc ON wc.execution_candidate_id = ac.EXECUTION_CANDIDATE_ID
+),
+daily AS (
+    SELECT
+        dt,
+        ROUND(100.0 * SUM(install_task_open) / NULLIF(COUNT(*), 0), 1)                          AS task_open_rate,
+        ROUND(100.0 * (SUM(tech_assigned) + SUM(slot_declined)) / NULLIF(SUM(install_task_open), 0), 1) AS response_rate,
+        ROUND(100.0 * SUM(tech_assigned) / NULLIF(SUM(install_task_open), 0), 1)                 AS task_assign_rate,
+        ROUND(100.0 * SUM(slot_declined) / NULLIF(SUM(install_task_open), 0), 1)                 AS task_decline_rate,
+        ROUND(100.0 * SUM(step_selfie) / NULLIF(SUM(tech_assigned), 0), 1)                      AS technician_arrival_rate,
+        ROUND(100.0 * SUM(installed) / NULLIF(SUM(step_selfie), 0), 1)                          AS install_rate
+    FROM candidate_level
+    GROUP BY 1
+),
+rates_long AS (
+    SELECT dt, 1 AS sort_ord, 'Task Open Rate' AS metric, task_open_rate AS val FROM daily
+    UNION ALL
+    SELECT dt, 2, 'Response Rate ((Assigned+Declined)/Task Open)', response_rate FROM daily
+    UNION ALL
+    SELECT dt, 3, 'Task Assign Rate', task_assign_rate FROM daily
+    UNION ALL
+    SELECT dt, 4, 'Task Decline Rate', task_decline_rate FROM daily
+    UNION ALL
+    SELECT dt, 5, 'Technician Arrival Rate', technician_arrival_rate FROM daily
+    UNION ALL
+    SELECT dt, 6, 'Install Rate', install_rate FROM daily
+)
+SELECT
+  metric,
+  MAX(CASE WHEN dt = CURRENT_DATE - 1 THEN val END)                                                                                   AS "T-1",
+  MAX(CASE WHEN dt = CURRENT_DATE - 2 THEN val END)                                                                                   AS "T-2",
+  MAX(CASE WHEN dt = CURRENT_DATE - 3 THEN val END)                                                                                   AS "T-3",
+  MAX(CASE WHEN dt = CURRENT_DATE - 4 THEN val END)                                                                                   AS "T-4",
+  MAX(CASE WHEN dt = CURRENT_DATE - 5 THEN val END)                                                                                   AS "T-5",
+  MAX(CASE WHEN dt = CURRENT_DATE - 6 THEN val END)                                                                                   AS "T-6",
+  MAX(CASE WHEN dt = CURRENT_DATE - 7 THEN val END)                                                                                   AS "T-7",
+  MAX(CASE WHEN dt = CURRENT_DATE - 8 THEN val END)                                                                                   AS "T-8",
+  ROUND(AVG(CASE WHEN dt BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1 THEN val::FLOAT END), 1)                                      AS "Mean",
+  MEDIAN(CASE WHEN dt BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1 THEN val::FLOAT END)                                             AS "Median",
+  ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CASE WHEN dt BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1 THEN val::FLOAT END), 1) AS "P90"
+FROM rates_long
+GROUP BY sort_ord, metric
+ORDER BY sort_ord
+"""
+
 # ── B2I Efficiency Counts (absolute numbers) ─────────────────────
 
 QUERIES["b2i_efficiency_counts"] = r"""
