@@ -297,7 +297,7 @@ function loadMetric(key, wfName, type) {
 
   const rows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[key] : null;
 
-  const hasSubtables = key === 'isp_recharge_raw' || key === 'service_tickets_raw' || key === 'pickup_tickets_raw' || key === 'quality_efficiency' || key === 'quality_health' || key === 'service_tickets_efficiency';
+  const hasSubtables = key === 'isp_recharge_raw' || key === 'service_tickets_raw' || key === 'pickup_tickets_raw' || key === 'quality_efficiency' || key === 'quality_health' || key === 'service_tickets_efficiency' || key === 'earnings_efficiency';
   if ((!rows || rows.length === 0) && !hasSubtables) {
     document.getElementById('mainBody').innerHTML =
       '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
@@ -559,6 +559,24 @@ function loadMetric(key, wfName, type) {
         html += '<div class="section-label" style="margin-top:36px">' + subtype + '</div>';
         html += buildTableHtml(sRows, TAT_COLS, false);
       });
+    }
+    if (!html) {
+      html = '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
+    }
+  }
+
+  if (key === 'earnings_efficiency') {
+    html = '';
+    const EARN_MOM_COLS = ['M-0','M-1','M-2','M-3','M-4','M-5','M-6','M-7','M-8','M-9','M-10','M-11','M-12','M-13'];
+    const trendRows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['earnings_trend_mom'] : null;
+    if (trendRows && trendRows.length > 0) {
+      html += '<div class="section-label">Total Earnings Trend MoM</div>';
+      html += buildTableHtml(trendRows, EARN_MOM_COLS, false, null, false);
+    }
+    const cspConnRows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['earnings_csp_conn_level'] : null;
+    if (cspConnRows && cspConnRows.length > 0) {
+      html += '<div class="section-label" style="margin-top:36px">Earnings at CSP and Connection Level</div>';
+      html += buildTableHtml(cspConnRows, EARN_MOM_COLS, false, null, false);
     }
     if (!html) {
       html = '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
