@@ -781,7 +781,7 @@ function buildTableHtml(rows, cols, pct, clickable, redHighlight) {
   html += '</tr></thead><tbody>';
 
   for (const row of rows) {
-    const nameRaw = row.METRIC_NAME || row.metric_name || row.metric || row.METRIC || row.Metric || row.entry_type || row.ENTRY_TYPE || '';
+    const nameRaw = row.METRIC_NAME || row.metric_name || row.metric || row.METRIC || row.Metric || row.State || row.STATE || row.state || row.entry_type || row.ENTRY_TYPE || '';
     const name = METRIC_RENAME[nameRaw] || nameRaw;
     const isSection = name.startsWith('---');
     if (isSection) {
