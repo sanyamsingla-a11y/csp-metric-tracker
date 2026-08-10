@@ -5898,6 +5898,8 @@ def _build_all_file_queries():
         "quality_m3_comp_acc": "quality_m3_comp_acc.sql",
         "quality_m4_comp_acc": "quality_m4_comp_acc.sql",
         "quality_t1t2_comp_acc": "quality_t1t2_comp_acc.sql",
+        "quality_retention_cycle": "quality_retention_cycle.sql",
+        "quality_nqs": "quality_nqs.sql",
     })
     return d
 

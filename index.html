@@ -515,6 +515,21 @@ function loadMetric(key, wfName, type) {
 
   if (key === 'quality_efficiency') {
     html = '';
+    // --- Retention Trend Cycle over Cycle (on top) ---
+    const retRows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['quality_retention_cycle'] : null;
+    if (retRows && retRows.length > 0) {
+      const RET_COLS = ['C1','C2','C3','C4','C5','C6','C7','C8'];
+      html += '<div class="section-label">Retention Trend Cycle over Cycle (CSP - Compliant + VG)</div>';
+      html += buildTableHtml(retRows, RET_COLS, false, null, false);
+    }
+    // --- Net Quality Score (on top) ---
+    const nqsRows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['quality_nqs'] : null;
+    if (nqsRows && nqsRows.length > 0) {
+      html += '<div class="section-label" style="margin-top:36px">Net Quality Score (CSPs improved − CSP demoted)</div>';
+      const nqsCols = Object.keys(nqsRows[0]).filter(c => c !== 'Metric' && c !== 'METRIC');
+      html += buildTableHtml(nqsRows, nqsCols, false, null, false);
+    }
+    // --- Existing sections ---
     const qSections = [
       { k: 'quality_composite_state', title: 'Composite State' },
       { k: 'quality_tier_verdict', title: 'Tier Verdict' },
