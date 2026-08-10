@@ -5900,6 +5900,13 @@ def _build_all_file_queries():
         "quality_t1t2_comp_acc": "quality_t1t2_comp_acc.sql",
         "quality_retention_cycle": "quality_retention_cycle.sql",
         "quality_nqs": "quality_nqs.sql",
+        "quality_raw_compliant_insufficient": "quality_raw_compliant_insufficient.sql",
+        "quality_raw_m1_install": "quality_raw_m1_install.sql",
+        "quality_raw_m2_resolution": "quality_raw_m2_resolution.sql",
+        "quality_raw_m3_long_open": "quality_raw_m3_long_open.sql",
+        "quality_raw_m4_ratings": "quality_raw_m4_ratings.sql",
+        "quality_raw_t1_optical": "quality_raw_t1_optical.sql",
+        "quality_raw_t2_speed": "quality_raw_t2_speed.sql",
     })
     return d
 

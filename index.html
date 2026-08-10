@@ -230,7 +230,7 @@ const WORKFLOWS = [
   { id: 'service_tickets',  name: 'Service Tickets',    health: 'service_tickets_health',  efficiency: 'service_tickets_efficiency', raw: 'service_tickets_raw' },
   { id: 'pickup_tickets',   name: 'Pickup Tickets',     health: 'pickup_tickets_health',   efficiency: 'pickup_tickets_efficiency',  raw: 'pickup_tickets_raw' },
   { id: 'isp_recharge',     name: 'ISP Recharge',       health: 'isp_recharge_health',     efficiency: 'isp_recharge_efficiency',  raw: 'isp_recharge_raw' },
-  { id: 'quality',          name: 'Quality',            health: 'quality_health',          efficiency: 'quality_efficiency' },
+  { id: 'quality',          name: 'Quality',            health: 'quality_health',          efficiency: 'quality_efficiency', raw: 'quality_raw' },
   { id: 'device_ordering',  name: 'Device Ordering',    health: 'device_ordering_health',  efficiency: 'device_ordering_efficiency' },
   { id: 'earnings',         name: 'Earnings',           health: 'earnings_health',         efficiency: 'earnings_efficiency',        raw: 'earnings_raw' },
   { id: 'ivr_ops',          name: 'IVR Ops (Phase 1)',  health: 'ivr_ops_phase1',          iframe: 'https://wiom-ivr-ops-dashboard.vercel.app/phase1' },
@@ -297,7 +297,7 @@ function loadMetric(key, wfName, type) {
 
   const rows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[key] : null;
 
-  const hasSubtables = key === 'isp_recharge_raw' || key === 'service_tickets_raw' || key === 'pickup_tickets_raw' || key === 'quality_efficiency' || key === 'quality_health' || key === 'service_tickets_efficiency' || key === 'earnings_efficiency';
+  const hasSubtables = key === 'isp_recharge_raw' || key === 'service_tickets_raw' || key === 'pickup_tickets_raw' || key === 'quality_efficiency' || key === 'quality_health' || key === 'service_tickets_efficiency' || key === 'earnings_efficiency' || key === 'quality_raw';
   if ((!rows || rows.length === 0) && !hasSubtables) {
     document.getElementById('mainBody').innerHTML =
       '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
@@ -541,6 +541,31 @@ function loadMetric(key, wfName, type) {
       if (d && d.length > 0) {
         html += '<div class="section-label" style="margin-top:36px">' + s.title + '</div>';
         html += buildDailyTableHtml(d);
+      }
+    });
+    if (!html) {
+      html = '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
+    }
+  }
+
+  if (key === 'quality_raw') {
+    html = '';
+    const QRAW_COLS = ['D-1','D-2','D-3','D-4','D-5','D-6','D-7','D-8','D-9','D-10','D-11','D-12','D-13','D-14','D-15','D-16','D-17','D-18','D-19','D-20','D-21','D-22','D-23','D-24','D-25','D-26','D-27','D-28','D-29','D-30'];
+    const qrawSections = [
+      { k: 'quality_raw_compliant_insufficient', title: 'Compliant but all 4 Quality Metrics Insufficient' },
+      { k: 'quality_raw_m1_install',             title: 'M1 — Install Compliance' },
+      { k: 'quality_raw_m2_resolution',          title: 'M2 — Tickets Resolved within SLA' },
+      { k: 'quality_raw_m3_long_open',           title: 'M3 — Long Open Complaints' },
+      { k: 'quality_raw_m4_ratings',             title: 'M4 — Service Ratings' },
+      { k: 'quality_raw_t1_optical',             title: 'T1 — Optical Power Compliance' },
+      { k: 'quality_raw_t2_speed',               title: 'T2 — Speed during Peak Hours' },
+    ];
+    qrawSections.forEach((s, i) => {
+      const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[s.k] : null;
+      if (d && d.length > 0) {
+        const mt = i === 0 ? '' : ' style="margin-top:36px"';
+        html += '<div class="section-label"' + mt + '>' + s.title + '</div>';
+        html += buildTableHtml(d, QRAW_COLS, false, null, false);
       }
     });
     if (!html) {
