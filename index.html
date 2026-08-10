@@ -227,7 +227,7 @@ tbody tr.row-section td:first-child { text-transform: uppercase; }
 <script>
 const WORKFLOWS = [
   { id: 'b2i',              name: 'Booking to Install', health: 'b2i_health',              efficiency: 'b2i_efficiency',             raw: 'b2i_funnel' },
-  { id: 'service_tickets',  name: 'Service Tickets',    health: 'service_tickets_health',  raw: 'service_tickets_raw' },
+  { id: 'service_tickets',  name: 'Service Tickets',    health: 'service_tickets_health',  efficiency: 'service_tickets_efficiency', raw: 'service_tickets_raw' },
   { id: 'pickup_tickets',   name: 'Pickup Tickets',     health: 'pickup_tickets_health',   efficiency: 'pickup_tickets_efficiency',  raw: 'pickup_tickets_raw' },
   { id: 'isp_recharge',     name: 'ISP Recharge',       health: 'isp_recharge_health',     efficiency: 'isp_recharge_efficiency',  raw: 'isp_recharge_raw' },
   { id: 'quality',          name: 'Quality',            health: 'quality_health',          efficiency: 'quality_efficiency' },
@@ -297,7 +297,7 @@ function loadMetric(key, wfName, type) {
 
   const rows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[key] : null;
 
-  const hasSubtables = key === 'isp_recharge_raw' || key === 'service_tickets_raw' || key === 'pickup_tickets_raw' || key === 'quality_efficiency' || key === 'quality_health';
+  const hasSubtables = key === 'isp_recharge_raw' || key === 'service_tickets_raw' || key === 'pickup_tickets_raw' || key === 'quality_efficiency' || key === 'quality_health' || key === 'service_tickets_efficiency';
   if ((!rows || rows.length === 0) && !hasSubtables) {
     document.getElementById('mainBody').innerHTML =
       '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
@@ -534,6 +534,28 @@ function loadMetric(key, wfName, type) {
              buildTableHtml(counts, COLS_COUNTS_ONLY, false) +
              '<div class="section-label">Match Rates (%)</div>' +
              html;
+    }
+  }
+
+  if (key === 'service_tickets_efficiency') {
+    html = '';
+    const tatRows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['service_tickets_resolution_tat'] : null;
+    if (tatRows && tatRows.length > 0) {
+      const TAT_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','AVERAGE','MEDIAN','P90'];
+      const subtypes = [];
+      tatRows.forEach(r => { const s = r['Subtype']; if (s && subtypes.indexOf(s) === -1) subtypes.push(s); });
+      subtypes.forEach(subtype => {
+        const sRows = tatRows.filter(r => r['Subtype'] === subtype).map(r => {
+          const copy = Object.assign({}, r);
+          delete copy['Subtype'];
+          return copy;
+        });
+        html += '<div class="section-label" style="margin-top:36px">' + subtype + '</div>';
+        html += buildTableHtml(sRows, TAT_COLS, false);
+      });
+    }
+    if (!html) {
+      html = '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
     }
   }
 

@@ -5890,6 +5890,7 @@ def _build_all_file_queries():
         "isp_health_obligation_creation_rate": "isp_health_obligation_creation_rate.sql",
         "isp_raw_ticket_creation": "isp_raw_ticket_creation.sql",
         "isp_ticket_creation_tat": "isp_ticket_creation_tat.sql",
+        "service_tickets_resolution_tat": "service_tickets_resolution_tat.sql",
         "quality_m1_comp_acc": "quality_m1_comp_acc.sql",
         "quality_m2_comp_acc": "quality_m2_comp_acc.sql",
         "quality_m3_comp_acc": "quality_m3_comp_acc.sql",
