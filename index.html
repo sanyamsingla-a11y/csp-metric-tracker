@@ -544,20 +544,20 @@ function loadMetric(key, wfName, type) {
   }
 
   if (key === 'pickup_tickets_efficiency') {
-    html = '';
+    // Default TAT table from main rows
+    if (rows && rows.length > 0) {
+      html = buildTableHtml(rows, COLS_FUNNEL, false, null, false);
+    }
     const PUT_EFF_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','30D Avg','30D Median','30D P90'];
     const putCounts = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['pickup_tickets_counts'] : null;
     if (putCounts && putCounts.length > 0) {
-      html += '<div class="section-label">Pickup Ticket Counts</div>';
+      html += '<div class="section-label" style="margin-top:36px">Pickup Ticket Counts</div>';
       html += buildTableHtml(putCounts, PUT_EFF_COLS, false, null, false);
     }
     const putAssign = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['pickup_tickets_assignment'] : null;
     if (putAssign && putAssign.length > 0) {
       html += '<div class="section-label" style="margin-top:36px">Assignment & Closure Breakdown</div>';
       html += buildTableHtml(putAssign, PUT_EFF_COLS, false, null, false);
-    }
-    if (!html) {
-      html = '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
     }
   }
 
