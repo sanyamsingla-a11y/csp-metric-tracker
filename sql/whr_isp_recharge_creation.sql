@@ -167,25 +167,25 @@ order by customer_plan_dates asc
 
 select
     'ISP Recharge Ticket Creation Rate' as Metric,
-    count(distinct case when ticket_due_date = dateadd(day,-1,current_date) and has_ticket_pm2=1 then connection_id end)
-      / nullif(count(distinct case when ticket_due_date = dateadd(day,-1,current_date) then connection_id end),0) as "D-1",
-    count(distinct case when ticket_due_date = dateadd(day,-2,current_date) and has_ticket_pm2=1 then connection_id end)
-      / nullif(count(distinct case when ticket_due_date = dateadd(day,-2,current_date) then connection_id end),0) as "D-2",
-    count(distinct case when ticket_due_date = dateadd(day,-3,current_date) and has_ticket_pm2=1 then connection_id end)
-      / nullif(count(distinct case when ticket_due_date = dateadd(day,-3,current_date) then connection_id end),0) as "D-3",
+    ROUND(100.0 * count(distinct case when ticket_due_date = dateadd(day,-1,current_date) and has_ticket_pm2=1 then connection_id end)
+      / nullif(count(distinct case when ticket_due_date = dateadd(day,-1,current_date) then connection_id end),0), 2) as "D-1",
+    ROUND(100.0 * count(distinct case when ticket_due_date = dateadd(day,-2,current_date) and has_ticket_pm2=1 then connection_id end)
+      / nullif(count(distinct case when ticket_due_date = dateadd(day,-2,current_date) then connection_id end),0), 2) as "D-2",
+    ROUND(100.0 * count(distinct case when ticket_due_date = dateadd(day,-3,current_date) and has_ticket_pm2=1 then connection_id end)
+      / nullif(count(distinct case when ticket_due_date = dateadd(day,-3,current_date) then connection_id end),0), 2) as "D-3",
 
-    count(distinct case when ticket_due_date between dateadd(week,-1,date_trunc('week',current_date)) and dateadd(day,-1,date_trunc('week',current_date)) and has_ticket_pm2=1 then connection_id end)
-      / nullif(count(distinct case when ticket_due_date between dateadd(week,-1,date_trunc('week',current_date)) and dateadd(day,-1,date_trunc('week',current_date)) then connection_id end),0) as "W-1",
-    count(distinct case when ticket_due_date between dateadd(week,-2,date_trunc('week',current_date)) and dateadd(day,-1,dateadd(week,-1,date_trunc('week',current_date))) and has_ticket_pm2=1 then connection_id end)
-      / nullif(count(distinct case when ticket_due_date between dateadd(week,-2,date_trunc('week',current_date)) and dateadd(day,-1,dateadd(week,-1,date_trunc('week',current_date))) then connection_id end),0) as "W-2",
-    count(distinct case when ticket_due_date between dateadd(week,-3,date_trunc('week',current_date)) and dateadd(day,-1,dateadd(week,-2,date_trunc('week',current_date))) and has_ticket_pm2=1 then connection_id end)
-      / nullif(count(distinct case when ticket_due_date between dateadd(week,-3,date_trunc('week',current_date)) and dateadd(day,-1,dateadd(week,-2,date_trunc('week',current_date))) then connection_id end),0) as "W-3",
+    ROUND(100.0 * count(distinct case when ticket_due_date between dateadd(week,-1,date_trunc('week',current_date)) and dateadd(day,-1,date_trunc('week',current_date)) and has_ticket_pm2=1 then connection_id end)
+      / nullif(count(distinct case when ticket_due_date between dateadd(week,-1,date_trunc('week',current_date)) and dateadd(day,-1,date_trunc('week',current_date)) then connection_id end),0), 2) as "W-1",
+    ROUND(100.0 * count(distinct case when ticket_due_date between dateadd(week,-2,date_trunc('week',current_date)) and dateadd(day,-1,dateadd(week,-1,date_trunc('week',current_date))) and has_ticket_pm2=1 then connection_id end)
+      / nullif(count(distinct case when ticket_due_date between dateadd(week,-2,date_trunc('week',current_date)) and dateadd(day,-1,dateadd(week,-1,date_trunc('week',current_date))) then connection_id end),0), 2) as "W-2",
+    ROUND(100.0 * count(distinct case when ticket_due_date between dateadd(week,-3,date_trunc('week',current_date)) and dateadd(day,-1,dateadd(week,-2,date_trunc('week',current_date))) and has_ticket_pm2=1 then connection_id end)
+      / nullif(count(distinct case when ticket_due_date between dateadd(week,-3,date_trunc('week',current_date)) and dateadd(day,-1,dateadd(week,-2,date_trunc('week',current_date))) then connection_id end),0), 2) as "W-3",
 
-    count(distinct case when ticket_due_date between dateadd(month,-1,date_trunc('month',current_date)) and dateadd(day,-1,date_trunc('month',current_date)) and has_ticket_pm2=1 then connection_id end)
-      / nullif(count(distinct case when ticket_due_date between dateadd(month,-1,date_trunc('month',current_date)) and dateadd(day,-1,date_trunc('month',current_date)) then connection_id end),0) as "M-1",
-    count(distinct case when ticket_due_date between dateadd(month,-2,date_trunc('month',current_date)) and dateadd(day,-1,dateadd(month,-1,date_trunc('month',current_date))) and has_ticket_pm2=1 then connection_id end)
-      / nullif(count(distinct case when ticket_due_date between dateadd(month,-2,date_trunc('month',current_date)) and dateadd(day,-1,dateadd(month,-1,date_trunc('month',current_date))) then connection_id end),0) as "M-2",
-    count(distinct case when ticket_due_date between dateadd(month,-3,date_trunc('month',current_date)) and dateadd(day,-1,dateadd(month,-2,date_trunc('month',current_date))) and has_ticket_pm2=1 then connection_id end)
-      / nullif(count(distinct case when ticket_due_date between dateadd(month,-3,date_trunc('month',current_date)) and dateadd(day,-1,dateadd(month,-2,date_trunc('month',current_date))) then connection_id end),0) as "M-3"
+    ROUND(100.0 * count(distinct case when ticket_due_date between dateadd(month,-1,date_trunc('month',current_date)) and dateadd(day,-1,date_trunc('month',current_date)) and has_ticket_pm2=1 then connection_id end)
+      / nullif(count(distinct case when ticket_due_date between dateadd(month,-1,date_trunc('month',current_date)) and dateadd(day,-1,date_trunc('month',current_date)) then connection_id end),0), 2) as "M-1",
+    ROUND(100.0 * count(distinct case when ticket_due_date between dateadd(month,-2,date_trunc('month',current_date)) and dateadd(day,-1,dateadd(month,-1,date_trunc('month',current_date))) and has_ticket_pm2=1 then connection_id end)
+      / nullif(count(distinct case when ticket_due_date between dateadd(month,-2,date_trunc('month',current_date)) and dateadd(day,-1,dateadd(month,-1,date_trunc('month',current_date))) then connection_id end),0), 2) as "M-2",
+    ROUND(100.0 * count(distinct case when ticket_due_date between dateadd(month,-3,date_trunc('month',current_date)) and dateadd(day,-1,dateadd(month,-2,date_trunc('month',current_date))) and has_ticket_pm2=1 then connection_id end)
+      / nullif(count(distinct case when ticket_due_date between dateadd(month,-3,date_trunc('month',current_date)) and dateadd(day,-1,dateadd(month,-2,date_trunc('month',current_date))) then connection_id end),0), 2) as "M-3"
 from
 Final_data_N

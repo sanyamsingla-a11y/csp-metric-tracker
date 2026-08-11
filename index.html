@@ -725,8 +725,8 @@ function loadMetric(key, wfName, type) {
     const WHR_COLS = ['D-1','D-2','D-3','W-1','W-2','W-3','M-1','M-2','M-3'];
     // Config: query key, KPI label from query result, display name, description
     const WHR_CONFIG = [
-      { key: 'whr_b2i_task_creation', match: 'B2I Task Creation Rate', name: 'Booking-to-Task Task Creation Rate %', desc: 'All verified booking have a task created in our tracking tables' },
-      { key: 'whr_b2i_task_creation', match: 'B2I CSP Assignment Rate', name: 'Booking-to-Task CSP Assignment Rate %', desc: 'Of the total verified bookings, % of tasks having csp assigned' },
+      { key: 'whr_b2i_task_creation', match: 'Booking-to-Task Task Creation Rate %', name: 'Booking-to-Task Task Creation Rate %', desc: 'All verified booking have a task created in our tracking tables' },
+      { key: 'whr_b2i_task_creation', match: 'Booking-to-Task CSP Assignment Rate %', name: 'Booking-to-Task CSP Assignment Rate %', desc: 'Of the total verified bookings, % of tasks having csp assigned' },
       { key: 'whr_notif_sent', match: null, name: 'Booking-to-Task Notif Sent Rate %', desc: 'PN/FPN Sent Rate of the total tasks created' },
       { key: 'whr_notif_receive', match: null, name: 'Booking-to-Task Notif Receive Rate %', desc: 'PN/FPN Received Rate of the tasks where pn was sent' },
       { key: 'whr_st_cross_table_match', match: null, name: 'Service Ticket Cross-Table Match Rate', desc: 'Internet related service tickets created in service ticket model should be same as tickets made in complaints table' },
@@ -766,18 +766,6 @@ function loadMetric(key, wfName, type) {
     if (!hasData) {
       html = '<div class="no-data"><p>No WHR data loaded yet.<br>Run <code>python refresh_workflows.py --only=whr_b2i_task_creation,whr_notif_sent,...</code></p></div>';
     } else {
-      // Header scores: average across all 17 KPIs per column
-      const headerScores = {};
-      WHR_COLS.forEach(c => {
-        const vals = resolvedRows.map(r => r.data ? parseFloat(r.data[c]) : NaN).filter(v => !isNaN(v));
-        headerScores[c] = vals.length > 0 ? (vals.reduce((a,b) => a+b, 0) / vals.length) : null;
-      });
-      function scoreColor(v) {
-        if (v === null || isNaN(v)) return '#6b7280';
-        if (v >= 99) return '#10b981';
-        if (v >= 95) return '#f59e0b';
-        return '#ef4444';
-      }
       function cellStyle(v) {
         const n = parseFloat(v);
         if (isNaN(n)) return '';
@@ -801,9 +789,7 @@ function loadMetric(key, wfName, type) {
       t += '<div style="overflow-x:auto"><table class="whr-tbl"><thead><tr>';
       t += '<th style="width:24px">#</th><th style="width:220px">KPI</th><th style="width:120px">Desc</th>';
       WHR_COLS.forEach(c => {
-        const sc = headerScores[c];
-        const col = scoreColor(sc);
-        t += '<th><div style="color:' + col + ';font-weight:700;font-size:12px">' + (sc !== null ? sc.toFixed(1) + '%' : '—') + '</div>' + c + '</th>';
+        t += '<th>' + c + '</th>';
       });
       t += '</tr></thead><tbody>';
       resolvedRows.forEach((r, i) => {
