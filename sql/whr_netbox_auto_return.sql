@@ -1,0 +1,32 @@
+WITH params AS (SELECT DATE(CONVERT_TIMEZONE('UTC','Asia/Kolkata',CURRENT_TIMESTAMP())) AS today),
+t1 AS (SELECT *,
+LEAD(nc.status) OVER (PARTITION BY device_id ORDER BY updated_at) AS next_status,
+LEAD(nc.updated_at) OVER (PARTITION BY device_id ORDER BY updated_at) AS next_updated_at
+FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY nc ),
+t2 AS (SELECT t1.UPDATED_AT+INTERVAL '330 minute' AS UPDATED_AT ,
+t1.STATUS ,
+t1.IDLE_START_DATE+INTERVAL '330 minutes' AS  IDLE_START_DATE,
+t1.DEVICE_ID ,
+t1.NEXT_STATUS ,
+t1.NEXT_UPDATED_AT+INTERVAL '330 minutes' AS NEXT_UPDATED_AT ,
+DATEDIFF(day, t1.IDLE_START_DATE+INTERVAL '330 minutes', COALESCE(t1.NEXT_UPDATED_AT+INTERVAL '330 minutes', CURRENT_TIMESTAMP())) AS days
+FROM t1
+WHERE status = 'IDLE' AND (NEXT_STATUS <> 'IDLE' OR NEXT_STATUS IS NULL)
+AND IDLE_START_DATE IS NOT NULL
+AND DATEDIFF(day, t1.IDLE_START_DATE+INTERVAL '330 minutes', COALESCE(t1.NEXT_UPDATED_AT+INTERVAL '330 minutes', CURRENT_TIMESTAMP())) > 99
+),
+base AS (SELECT date(IDLE_START_DATE+INTERVAL '100 days') AS d,
+CASE WHEN NEXT_STATUS = 'RETRIEVAL_PENDING' THEN 1 ELSE 0 END AS num,
+1 AS den
+FROM t2)
+SELECT 'Netbox Auto Return Rate' AS kpi,
+  1.0*SUM(CASE WHEN d = p.today-1 THEN num END)/NULLIF(SUM(CASE WHEN d = p.today-1 THEN den END),0)*100 AS "D-1",
+  1.0*SUM(CASE WHEN d = p.today-2 THEN num END)/NULLIF(SUM(CASE WHEN d = p.today-2 THEN den END),0)*100 AS "D-2",
+  1.0*SUM(CASE WHEN d = p.today-3 THEN num END)/NULLIF(SUM(CASE WHEN d = p.today-3 THEN den END),0)*100 AS "D-3",
+  1.0*SUM(CASE WHEN d BETWEEN DATEADD('day',-7, DATE_TRUNC('week',p.today)) AND DATEADD('day',-1, DATE_TRUNC('week',p.today)) THEN num END)/NULLIF(SUM(CASE WHEN d BETWEEN DATEADD('day',-7, DATE_TRUNC('week',p.today)) AND DATEADD('day',-1, DATE_TRUNC('week',p.today)) THEN den END),0)*100 AS "W-1",
+  1.0*SUM(CASE WHEN d BETWEEN DATEADD('day',-14,DATE_TRUNC('week',p.today)) AND DATEADD('day',-8, DATE_TRUNC('week',p.today)) THEN num END)/NULLIF(SUM(CASE WHEN d BETWEEN DATEADD('day',-14,DATE_TRUNC('week',p.today)) AND DATEADD('day',-8, DATE_TRUNC('week',p.today)) THEN den END),0)*100 AS "W-2",
+  1.0*SUM(CASE WHEN d BETWEEN DATEADD('day',-21,DATE_TRUNC('week',p.today)) AND DATEADD('day',-15,DATE_TRUNC('week',p.today)) THEN num END)/NULLIF(SUM(CASE WHEN d BETWEEN DATEADD('day',-21,DATE_TRUNC('week',p.today)) AND DATEADD('day',-15,DATE_TRUNC('week',p.today)) THEN den END),0)*100 AS "W-3",
+  1.0*SUM(CASE WHEN DATE_TRUNC('month',d) = DATEADD('month',-1,DATE_TRUNC('month',p.today)) THEN num END)/NULLIF(SUM(CASE WHEN DATE_TRUNC('month',d) = DATEADD('month',-1,DATE_TRUNC('month',p.today)) THEN den END),0)*100 AS "M-1",
+  1.0*SUM(CASE WHEN DATE_TRUNC('month',d) = DATEADD('month',-2,DATE_TRUNC('month',p.today)) THEN num END)/NULLIF(SUM(CASE WHEN DATE_TRUNC('month',d) = DATEADD('month',-2,DATE_TRUNC('month',p.today)) THEN den END),0)*100 AS "M-2",
+  1.0*SUM(CASE WHEN DATE_TRUNC('month',d) = DATEADD('month',-3,DATE_TRUNC('month',p.today)) THEN num END)/NULLIF(SUM(CASE WHEN DATE_TRUNC('month',d) = DATEADD('month',-3,DATE_TRUNC('month',p.today)) THEN den END),0)*100 AS "M-3"
+ FROM base CROSS JOIN params p;

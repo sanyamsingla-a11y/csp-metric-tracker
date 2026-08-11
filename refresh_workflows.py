@@ -5910,6 +5910,22 @@ def _build_all_file_queries():
         "quality_raw_m4_ratings": "quality_raw_m4_ratings.sql",
         "quality_raw_t1_optical": "quality_raw_t1_optical.sql",
         "quality_raw_t2_speed": "quality_raw_t2_speed.sql",
+        "whr_b2i_task_creation": "whr_b2i_task_creation.sql",
+        "whr_notif_sent": "whr_notif_sent.sql",
+        "whr_notif_receive": "whr_notif_receive.sql",
+        "whr_st_cross_table_match": "whr_st_cross_table_match.sql",
+        "whr_overall_ticket_match": "whr_overall_ticket_match.sql",
+        "whr_service_task_creation": "whr_service_task_creation.sql",
+        "whr_pickup_task_creation": "whr_pickup_task_creation.sql",
+        "whr_pickup_auto_credit": "whr_pickup_auto_credit.sql",
+        "whr_isp_recharge_creation": "whr_isp_recharge_creation.sql",
+        "whr_isp_pn_sent": "whr_isp_pn_sent.sql",
+        "whr_isp_pn_delivered": "whr_isp_pn_delivered.sql",
+        "whr_device_order_recon": "whr_device_order_recon.sql",
+        "whr_comp_settlement": "whr_comp_settlement.sql",
+        "whr_error_free_computation": "whr_error_free_computation.sql",
+        "whr_netbox_auto_return": "whr_netbox_auto_return.sql",
+        "whr_payments_no_adhoc": "whr_payments_no_adhoc.sql",
     })
     return d
 

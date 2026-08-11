@@ -62,6 +62,7 @@ body { font-family: var(--sans); color: var(--ink); background: var(--ground); d
 .wf-item .dot-health { width: 5px; height: 5px; border-radius: 50%; background: var(--good); flex-shrink: 0; }
 .wf-item .dot-efficiency { width: 5px; height: 5px; border-radius: 50%; background: var(--warn); flex-shrink: 0; }
 .wf-item .dot-funnel { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+.wf-item.whr-top { padding-left: 16px; font-size: 13px; font-weight: 600; color: var(--sidebar-ink); margin-bottom: 8px; border-bottom: 1px solid var(--sidebar-border); padding-bottom: 10px; }
 
 .sidebar-footer {
   padding: 12px 16px; border-top: 1px solid var(--sidebar-border);
@@ -247,7 +248,9 @@ let activeKey = null;
 
 function buildSidebar() {
   const nav = document.getElementById('sidebarNav');
-  nav.innerHTML = WORKFLOWS.map(wf => `
+  nav.innerHTML = `<div class="wf-item whr-top" data-key="weekly_health_review" onclick="loadMetric('weekly_health_review','Weekly Health Review','')">
+    <span class="dot-health" style="background:#10b981"></span> Weekly Health Review
+  </div>` + WORKFLOWS.map(wf => `
     <div class="wf-group" data-wf="${wf.id}">
       <button class="wf-toggle" onclick="toggleGroup('${wf.id}')">
         <svg class="chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -281,12 +284,12 @@ function loadMetric(key, wfName, type) {
 
   activeKey = key;
 
-  document.getElementById('breadcrumb').innerHTML = `
+  document.getElementById('breadcrumb').innerHTML = type ? `
     <span>Workflows</span><span class="sep">/</span>
     <span>${wfName}</span><span class="sep">/</span>
     <span class="bc-active">${type}</span>
-  `;
-  document.getElementById('mainTitle').textContent = wfName + ' — ' + type;
+  ` : `<span>Workflows</span><span class="sep">/</span><span class="bc-active">${wfName}</span>`;
+  document.getElementById('mainTitle').textContent = type ? wfName + ' — ' + type : wfName;
 
   const iframeWf = WORKFLOWS.find(w => w.health === key && w.iframe);
   if (iframeWf) {
@@ -297,7 +300,7 @@ function loadMetric(key, wfName, type) {
 
   const rows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[key] : null;
 
-  const hasSubtables = key === 'isp_recharge_raw' || key === 'service_tickets_raw' || key === 'pickup_tickets_raw' || key === 'quality_efficiency' || key === 'quality_health' || key === 'service_tickets_efficiency' || key === 'earnings_efficiency' || key === 'quality_raw' || key === 'pickup_tickets_efficiency';
+  const hasSubtables = key === 'isp_recharge_raw' || key === 'service_tickets_raw' || key === 'pickup_tickets_raw' || key === 'quality_efficiency' || key === 'quality_health' || key === 'service_tickets_efficiency' || key === 'earnings_efficiency' || key === 'quality_raw' || key === 'pickup_tickets_efficiency' || key === 'weekly_health_review';
   if ((!rows || rows.length === 0) && !hasSubtables) {
     document.getElementById('mainBody').innerHTML =
       '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
@@ -718,6 +721,90 @@ function loadMetric(key, wfName, type) {
     }
   }
 
+  if (key === 'weekly_health_review') {
+    const WHR_KEYS = [
+      'whr_b2i_task_creation','whr_notif_sent','whr_notif_receive',
+      'whr_st_cross_table_match','whr_overall_ticket_match',
+      'whr_service_task_creation','whr_pickup_task_creation','whr_pickup_auto_credit',
+      'whr_isp_recharge_creation','whr_isp_pn_sent','whr_isp_pn_delivered',
+      'whr_device_order_recon','whr_comp_settlement',
+      'whr_error_free_computation','whr_netbox_auto_return','whr_payments_no_adhoc'
+    ];
+    const WHR_COLS = ['D-1','D-2','D-3','W-1','W-2','W-3','M-1','M-2','M-3'];
+    const WHR_DESCRIPTIONS = {
+      'B2I Task Creation Rate': 'Booking → CLOS+DAS+TAS task created',
+      'B2I CSP Assignment Rate': 'Task created → CSP assigned',
+      'Booking-to-Task Notif Sent Rate %': 'PN sent to CSP after task creation',
+      'Booking-to-Task Notif Receive Rate %': 'PN delivered to CSP device',
+      'Service Ticket Cross-Table Match Rate': 'Kapture tickets found in SRS complaints',
+      'Overall Ticket Level Match Rate': 'SRS↔TAS↔Kapture ticket match',
+      'Service Task Creation Rate': 'Complaint → execution candidate created',
+      'D1 — Task-Creation Reliability': 'PUT ticket → NBREC task within 6h',
+      'Pickup Auto Credit Rate': 'Recovery completed → wallet credit auto-posted',
+      'ISP Recharge Ticket Creation Rate': 'Recharge due → ticket created ±2d',
+      'ISP Ticket-to-CSP Visibility Rate - PN Sent': 'Recharge task → PN sent to CSP',
+      'ISP Ticket-to-CSP Visibility Rate - PN Delivered': 'Recharge task → PN delivered to CSP',
+      'Device Order Reconciliation Rate': 'Pyrops order → Device Order record match',
+      'On-Time, Error-Free Transaction Rate': 'All payment types reconciled correctly',
+      'Netbox Auto Return Rate': 'Idle 100d → auto RETRIEVAL_PENDING triggered',
+      'BASE+BONUS+RECOVERY % of TOTAL': 'Core payouts as % of all wallet entries',
+    };
+    let allRows = [];
+    WHR_KEYS.forEach(k => {
+      const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[k] : null;
+      if (d && d.length > 0) allRows = allRows.concat(d);
+    });
+
+    if (allRows.length === 0) {
+      html = '<div class="no-data"><p>No WHR data loaded yet.<br>Run <code>python refresh_workflows.py --only=whr_b2i_task_creation,whr_notif_sent,...</code></p></div>';
+    } else {
+      // Build header scores (average across all KPIs per column)
+      const headerScores = {};
+      WHR_COLS.forEach(c => {
+        const vals = allRows.map(r => parseFloat(r[c])).filter(v => !isNaN(v));
+        headerScores[c] = vals.length > 0 ? (vals.reduce((a,b) => a+b, 0) / vals.length) : null;
+      });
+      function scoreColor(v) {
+        if (v === null || isNaN(v)) return '#6b7280';
+        if (v >= 99) return '#10b981';
+        if (v >= 95) return '#f59e0b';
+        return '#ef4444';
+      }
+      function cellStyle(v) {
+        const n = parseFloat(v);
+        if (isNaN(n)) return '';
+        if (n < 95) return ' style="background:rgba(239,68,68,0.15);color:#ef4444;font-weight:600"';
+        if (n < 99) return ' style="background:rgba(245,158,11,0.12);color:#f59e0b;font-weight:600"';
+        return '';
+      }
+
+      let t = '<div style="margin-bottom:12px;text-align:right"><a id="whr-csv-download" href="#" onclick="downloadWhrCsv(event)" style="color:var(--accent);font-size:13px;text-decoration:none">⬇ Download CSV</a></div>';
+      t += '<div class="table-wrap"><table class="metric-tbl"><thead><tr>';
+      t += '<th style="min-width:30px">#</th><th style="min-width:200px">KPI</th><th style="min-width:200px">Description</th>';
+      WHR_COLS.forEach(c => {
+        const sc = headerScores[c];
+        const col = scoreColor(sc);
+        t += '<th style="min-width:70px"><div style="color:' + col + ';font-weight:700">' + (sc !== null ? sc.toFixed(1) + '%' : '—') + '</div><div style="font-size:11px;color:var(--fg-dim)">' + c + '</div></th>';
+      });
+      t += '</tr></thead><tbody>';
+      allRows.forEach((r, i) => {
+        const kpi = r.kpi || r.KPI || r.Metric || r.metric || r.entry_type || r.ENTRY_TYPE || '';
+        const desc = WHR_DESCRIPTIONS[kpi] || '';
+        t += '<tr><td style="color:var(--fg-dim);font-size:12px">' + (i+1) + '</td>';
+        t += '<td style="font-weight:500;white-space:nowrap">' + kpi + '</td>';
+        t += '<td style="font-size:12px;color:var(--fg-dim)">' + desc + '</td>';
+        WHR_COLS.forEach(c => {
+          const v = r[c];
+          const display = v !== null && v !== undefined && v !== '' ? (typeof v === 'number' ? v.toFixed(2) + '%' : parseFloat(v).toFixed(2) + '%') : '—';
+          t += '<td' + cellStyle(v) + '>' + display + '</td>';
+        });
+        t += '</tr>';
+      });
+      t += '</tbody></table></div>';
+      html = t;
+    }
+  }
+
   body.innerHTML = html;
 }
 
@@ -797,6 +884,34 @@ const METRIC_RENAME = {
   'WITHDRAWAL': 'CSP Wallet Withdrawals',
   '% Closed within 2h': 'Recharge Done → PUT Closed Within 2h',
 };
+function downloadWhrCsv(e) {
+  e.preventDefault();
+  const WHR_KEYS = [
+    'whr_b2i_task_creation','whr_notif_sent','whr_notif_receive',
+    'whr_st_cross_table_match','whr_overall_ticket_match',
+    'whr_service_task_creation','whr_pickup_task_creation','whr_pickup_auto_credit',
+    'whr_isp_recharge_creation','whr_isp_pn_sent','whr_isp_pn_delivered',
+    'whr_device_order_recon','whr_comp_settlement',
+    'whr_error_free_computation','whr_netbox_auto_return','whr_payments_no_adhoc'
+  ];
+  const WHR_COLS = ['D-1','D-2','D-3','W-1','W-2','W-3','M-1','M-2','M-3'];
+  let allRows = [];
+  WHR_KEYS.forEach(k => {
+    const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[k] : null;
+    if (d && d.length > 0) allRows = allRows.concat(d);
+  });
+  let csv = 'KPI,' + WHR_COLS.join(',') + '\n';
+  allRows.forEach(r => {
+    const kpi = (r.kpi || r.KPI || r.Metric || r.metric || r.entry_type || r.ENTRY_TYPE || '').replace(/,/g,' ');
+    csv += kpi + ',' + WHR_COLS.map(c => r[c] !== null && r[c] !== undefined ? r[c] : '').join(',') + '\n';
+  });
+  const blob = new Blob([csv], {type: 'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'weekly_health_review.csv'; a.click();
+  URL.revokeObjectURL(url);
+}
+
 function buildTableHtml(rows, cols, pct, clickable, redHighlight) {
   if (redHighlight === undefined) redHighlight = pct;
   let html = '<div class="table-wrap"><table><thead><tr>';
