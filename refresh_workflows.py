@@ -5900,6 +5900,7 @@ def _build_all_file_queries():
         "quality_t1t2_comp_acc": "quality_t1t2_comp_acc.sql",
         "quality_retention_cycle": "quality_retention_cycle.sql",
         "quality_nqs": "quality_nqs.sql",
+        "service_tickets_assignment_closure": "service_tickets_assignment_closure.sql",
         "quality_raw_compliant_insufficient": "quality_raw_compliant_insufficient.sql",
         "quality_raw_m1_install": "quality_raw_m1_install.sql",
         "quality_raw_m2_resolution": "quality_raw_m2_resolution.sql",
