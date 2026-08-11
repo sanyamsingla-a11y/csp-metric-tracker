@@ -369,6 +369,11 @@ function loadMetric(key, wfName, type) {
       if (clRow) combined = combined.concat([clRow]);
     }
     html = buildTableHtml(combined, cols, isRates, null, isHealthView);
+    const putCounts = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['pickup_tickets_counts'] : null;
+    if (putCounts && putCounts.length > 0) {
+      html += '<div class="section-label" style="margin-top:36px">Absolute Counts</div>';
+      html += buildTableHtml(putCounts, ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','30D Avg','30D Median','30D P90'], false);
+    }
   }
 
   if (key === 'earnings_health') {
