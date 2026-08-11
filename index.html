@@ -722,46 +722,54 @@ function loadMetric(key, wfName, type) {
   }
 
   if (key === 'weekly_health_review') {
-    const WHR_KEYS = [
-      'whr_b2i_task_creation','whr_notif_sent','whr_notif_receive',
-      'whr_st_cross_table_match','whr_overall_ticket_match',
-      'whr_service_task_creation','whr_pickup_task_creation','whr_pickup_auto_credit',
-      'whr_isp_recharge_creation','whr_isp_pn_sent','whr_isp_pn_delivered',
-      'whr_device_order_recon','whr_comp_settlement',
-      'whr_error_free_computation','whr_netbox_auto_return','whr_payments_no_adhoc'
-    ];
     const WHR_COLS = ['D-1','D-2','D-3','W-1','W-2','W-3','M-1','M-2','M-3'];
-    const WHR_DESCRIPTIONS = {
-      'B2I Task Creation Rate': 'Booking → CLOS+DAS+TAS task created',
-      'B2I CSP Assignment Rate': 'Task created → CSP assigned',
-      'Booking-to-Task Notif Sent Rate %': 'PN sent to CSP after task creation',
-      'Booking-to-Task Notif Receive Rate %': 'PN delivered to CSP device',
-      'Service Ticket Cross-Table Match Rate': 'Kapture tickets found in SRS complaints',
-      'Overall Ticket Level Match Rate': 'SRS↔TAS↔Kapture ticket match',
-      'Service Task Creation Rate': 'Complaint → execution candidate created',
-      'D1 — Task-Creation Reliability': 'PUT ticket → NBREC task within 6h',
-      'Pickup Auto Credit Rate': 'Recovery completed → wallet credit auto-posted',
-      'ISP Recharge Ticket Creation Rate': 'Recharge due → ticket created ±2d',
-      'ISP Ticket-to-CSP Visibility Rate - PN Sent': 'Recharge task → PN sent to CSP',
-      'ISP Ticket-to-CSP Visibility Rate - PN Delivered': 'Recharge task → PN delivered to CSP',
-      'Device Order Reconciliation Rate': 'Pyrops order → Device Order record match',
-      'On-Time, Error-Free Transaction Rate': 'All payment types reconciled correctly',
-      'Netbox Auto Return Rate': 'Idle 100d → auto RETRIEVAL_PENDING triggered',
-      'BASE+BONUS+RECOVERY % of TOTAL': 'Core payouts as % of all wallet entries',
-    };
-    let allRows = [];
-    WHR_KEYS.forEach(k => {
-      const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[k] : null;
-      if (d && d.length > 0) allRows = allRows.concat(d);
-    });
+    // Config: query key, KPI label from query result, display name, description
+    const WHR_CONFIG = [
+      { key: 'whr_b2i_task_creation', match: 'B2I Task Creation Rate', name: 'Booking-to-Task Task Creation Rate %', desc: 'All verified booking have a task created in our tracking tables' },
+      { key: 'whr_b2i_task_creation', match: 'B2I CSP Assignment Rate', name: 'Booking-to-Task CSP Assignment Rate %', desc: 'Of the total verified bookings, % of tasks having csp assigned' },
+      { key: 'whr_notif_sent', match: null, name: 'Booking-to-Task Notif Sent Rate %', desc: 'PN/FPN Sent Rate of the total tasks created' },
+      { key: 'whr_notif_receive', match: null, name: 'Booking-to-Task Notif Receive Rate %', desc: 'PN/FPN Received Rate of the tasks where pn was sent' },
+      { key: 'whr_st_cross_table_match', match: null, name: 'Service Ticket Cross-Table Match Rate', desc: 'Internet related service tickets created in service ticket model should be same as tickets made in complaints table' },
+      { key: 'whr_overall_ticket_match', match: null, name: 'Overall Ticket Level Match Rate', desc: 'Except service and pickup ticket — match rate' },
+      { key: 'whr_service_task_creation', match: null, name: 'Service Ticket — Task Creation Rate', desc: 'For partner assigned service tickets — task being made or not' },
+      { key: 'whr_pickup_task_creation', match: null, name: 'Pickup Ticket Creation Rate (15-Day Paused Cohort)', desc: 'Pickup tickets created via customer or after 15 days a user went to paused state — ticket should be created in nbrec execution candidate table' },
+      { key: 'whr_pickup_auto_credit', match: null, name: 'Pickup Auto Credit Rate', desc: 'Auto credit rate on successful pickup' },
+      { key: 'whr_isp_recharge_creation', match: null, name: 'ISP Recharge Ticket Creation Rate', desc: 'All eligible ISP recharge ticket created from proactive and reactive flows depending on entitlement and window expiry date' },
+      { key: 'whr_isp_pn_sent', match: null, name: 'ISP Ticket-to-CSP Visibility Rate — PN Sent', desc: 'Ticket created vs being shown to CSP (PN sent)' },
+      { key: 'whr_isp_pn_delivered', match: null, name: 'ISP Ticket-to-CSP Visibility Rate — PN Delivered', desc: 'Ticket created vs being shown to CSP (PN delivered)' },
+      { key: 'whr_device_order_recon', match: null, name: 'Device Order Reconciliation Rate', desc: 'Tables showing device orders data should match at date and status level and ensure no discrepancy' },
+      { key: 'whr_comp_settlement', match: '__aggregate__', name: 'Compensation–Payment Settlement Consistency Rate', desc: 'Withdrawals and credit in compensation aligns with payment tables and vice versa for common entry types' },
+      { key: 'whr_error_free_computation', match: null, name: 'Error Free Computation Rate', desc: 'Payments that should be made vs how much is actually made' },
+      { key: 'whr_netbox_auto_return', match: null, name: 'Netbox Auto Return Rate', desc: 'Device marked RETRIEVAL_PENDING after 100 days cross in IDLE' },
+      { key: 'whr_payments_no_adhoc', match: null, name: 'Payments without adhoc adjustment', desc: '% of total payments made removing adhoc adjustments' },
+    ];
 
-    if (allRows.length === 0) {
+    function getWhrRow(cfg) {
+      const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[cfg.key] : null;
+      if (!d || d.length === 0) return null;
+      if (cfg.match === '__aggregate__') {
+        // Aggregate: min across all entry_type rows per column
+        const agg = {};
+        WHR_COLS.forEach(c => {
+          const vals = d.map(r => parseFloat(r[c])).filter(v => !isNaN(v));
+          agg[c] = vals.length > 0 ? Math.min(...vals) : null;
+        });
+        return agg;
+      }
+      if (cfg.match) return d.find(r => (r.kpi || r.KPI || r.Metric || r.metric || '') === cfg.match) || null;
+      return d[0];
+    }
+
+    const resolvedRows = WHR_CONFIG.map(cfg => ({ cfg, data: getWhrRow(cfg) }));
+    const hasData = resolvedRows.some(r => r.data);
+
+    if (!hasData) {
       html = '<div class="no-data"><p>No WHR data loaded yet.<br>Run <code>python refresh_workflows.py --only=whr_b2i_task_creation,whr_notif_sent,...</code></p></div>';
     } else {
-      // Build header scores (average across all KPIs per column)
+      // Header scores: average across all 17 KPIs per column
       const headerScores = {};
       WHR_COLS.forEach(c => {
-        const vals = allRows.map(r => parseFloat(r[c])).filter(v => !isNaN(v));
+        const vals = resolvedRows.map(r => r.data ? parseFloat(r.data[c]) : NaN).filter(v => !isNaN(v));
         headerScores[c] = vals.length > 0 ? (vals.reduce((a,b) => a+b, 0) / vals.length) : null;
       });
       function scoreColor(v) {
@@ -780,23 +788,21 @@ function loadMetric(key, wfName, type) {
 
       let t = '<div style="margin-bottom:12px;text-align:right"><a id="whr-csv-download" href="#" onclick="downloadWhrCsv(event)" style="color:var(--accent);font-size:13px;text-decoration:none">⬇ Download CSV</a></div>';
       t += '<div class="table-wrap"><table class="metric-tbl"><thead><tr>';
-      t += '<th style="min-width:30px">#</th><th style="min-width:200px">KPI</th><th style="min-width:200px">Description</th>';
+      t += '<th style="width:30px">#</th><th>KPI</th><th>Description</th>';
       WHR_COLS.forEach(c => {
         const sc = headerScores[c];
         const col = scoreColor(sc);
         t += '<th style="min-width:70px"><div style="color:' + col + ';font-weight:700">' + (sc !== null ? sc.toFixed(1) + '%' : '—') + '</div><div style="font-size:11px;color:var(--fg-dim)">' + c + '</div></th>';
       });
       t += '</tr></thead><tbody>';
-      allRows.forEach((r, i) => {
-        const kpi = r.kpi || r.KPI || r.Metric || r.metric || r.entry_type || r.ENTRY_TYPE || '';
-        const desc = WHR_DESCRIPTIONS[kpi] || '';
+      resolvedRows.forEach((r, i) => {
         t += '<tr><td style="color:var(--fg-dim);font-size:12px">' + (i+1) + '</td>';
-        t += '<td style="font-weight:500;white-space:nowrap">' + kpi + '</td>';
-        t += '<td style="font-size:12px;color:var(--fg-dim)">' + desc + '</td>';
+        t += '<td style="font-weight:500">' + r.cfg.name + '</td>';
+        t += '<td style="font-size:12px;color:var(--fg-dim)">' + r.cfg.desc + '</td>';
         WHR_COLS.forEach(c => {
-          const v = r[c];
+          const v = r.data ? r.data[c] : null;
           const display = v !== null && v !== undefined && v !== '' ? (typeof v === 'number' ? v.toFixed(2) + '%' : parseFloat(v).toFixed(2) + '%') : '—';
-          t += '<td' + cellStyle(v) + '>' + display + '</td>';
+          t += '<td' + cellStyle(v) + '>' + (isNaN(parseFloat(v)) ? '—' : display) + '</td>';
         });
         t += '</tr>';
       });
@@ -886,24 +892,39 @@ const METRIC_RENAME = {
 };
 function downloadWhrCsv(e) {
   e.preventDefault();
-  const WHR_KEYS = [
-    'whr_b2i_task_creation','whr_notif_sent','whr_notif_receive',
-    'whr_st_cross_table_match','whr_overall_ticket_match',
-    'whr_service_task_creation','whr_pickup_task_creation','whr_pickup_auto_credit',
-    'whr_isp_recharge_creation','whr_isp_pn_sent','whr_isp_pn_delivered',
-    'whr_device_order_recon','whr_comp_settlement',
-    'whr_error_free_computation','whr_netbox_auto_return','whr_payments_no_adhoc'
-  ];
+  // Reuse the same config as rendering
   const WHR_COLS = ['D-1','D-2','D-3','W-1','W-2','W-3','M-1','M-2','M-3'];
-  let allRows = [];
-  WHR_KEYS.forEach(k => {
-    const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[k] : null;
-    if (d && d.length > 0) allRows = allRows.concat(d);
-  });
+  const WHR_CSV_CONFIG = [
+    { key: 'whr_b2i_task_creation', match: 'B2I Task Creation Rate', name: 'Booking-to-Task Task Creation Rate %' },
+    { key: 'whr_b2i_task_creation', match: 'B2I CSP Assignment Rate', name: 'Booking-to-Task CSP Assignment Rate %' },
+    { key: 'whr_notif_sent', match: null, name: 'Booking-to-Task Notif Sent Rate %' },
+    { key: 'whr_notif_receive', match: null, name: 'Booking-to-Task Notif Receive Rate %' },
+    { key: 'whr_st_cross_table_match', match: null, name: 'Service Ticket Cross-Table Match Rate' },
+    { key: 'whr_overall_ticket_match', match: null, name: 'Overall Ticket Level Match Rate' },
+    { key: 'whr_service_task_creation', match: null, name: 'Service Ticket - Task Creation Rate' },
+    { key: 'whr_pickup_task_creation', match: null, name: 'Pickup Ticket Creation Rate (15-Day Paused Cohort)' },
+    { key: 'whr_pickup_auto_credit', match: null, name: 'Pickup Auto Credit Rate' },
+    { key: 'whr_isp_recharge_creation', match: null, name: 'ISP Recharge Ticket Creation Rate' },
+    { key: 'whr_isp_pn_sent', match: null, name: 'ISP Ticket-to-CSP Visibility Rate - PN Sent' },
+    { key: 'whr_isp_pn_delivered', match: null, name: 'ISP Ticket-to-CSP Visibility Rate - PN Delivered' },
+    { key: 'whr_device_order_recon', match: null, name: 'Device Order Reconciliation Rate' },
+    { key: 'whr_comp_settlement', match: '__aggregate__', name: 'Compensation-Payment Settlement Consistency Rate' },
+    { key: 'whr_error_free_computation', match: null, name: 'Error Free Computation Rate' },
+    { key: 'whr_netbox_auto_return', match: null, name: 'Netbox Auto Return Rate' },
+    { key: 'whr_payments_no_adhoc', match: null, name: 'Payments without adhoc adjustment' },
+  ];
   let csv = 'KPI,' + WHR_COLS.join(',') + '\n';
-  allRows.forEach(r => {
-    const kpi = (r.kpi || r.KPI || r.Metric || r.metric || r.entry_type || r.ENTRY_TYPE || '').replace(/,/g,' ');
-    csv += kpi + ',' + WHR_COLS.map(c => r[c] !== null && r[c] !== undefined ? r[c] : '').join(',') + '\n';
+  WHR_CSV_CONFIG.forEach(cfg => {
+    const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[cfg.key] : null;
+    let row = null;
+    if (d && d.length > 0) {
+      if (cfg.match === '__aggregate__') {
+        row = {};
+        WHR_COLS.forEach(c => { const vals = d.map(r => parseFloat(r[c])).filter(v => !isNaN(v)); row[c] = vals.length > 0 ? Math.min(...vals) : ''; });
+      } else if (cfg.match) { row = d.find(r => (r.kpi || r.KPI || r.Metric || r.metric || '') === cfg.match); }
+      else { row = d[0]; }
+    }
+    csv += cfg.name.replace(/,/g,' ') + ',' + WHR_COLS.map(c => row && row[c] !== null && row[c] !== undefined ? row[c] : '').join(',') + '\n';
   });
   const blob = new Blob([csv], {type: 'text/csv'});
   const url = URL.createObjectURL(blob);
