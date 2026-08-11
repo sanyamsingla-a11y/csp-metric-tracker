@@ -5901,6 +5901,8 @@ def _build_all_file_queries():
         "quality_retention_cycle": "quality_retention_cycle.sql",
         "quality_nqs": "quality_nqs.sql",
         "service_tickets_assignment_closure": "service_tickets_assignment_closure.sql",
+        "pickup_tickets_counts": "pickup_tickets_counts.sql",
+        "pickup_tickets_assignment": "pickup_tickets_assignment.sql",
         "quality_raw_compliant_insufficient": "quality_raw_compliant_insufficient.sql",
         "quality_raw_m1_install": "quality_raw_m1_install.sql",
         "quality_raw_m2_resolution": "quality_raw_m2_resolution.sql",

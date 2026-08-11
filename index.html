@@ -297,7 +297,7 @@ function loadMetric(key, wfName, type) {
 
   const rows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[key] : null;
 
-  const hasSubtables = key === 'isp_recharge_raw' || key === 'service_tickets_raw' || key === 'pickup_tickets_raw' || key === 'quality_efficiency' || key === 'quality_health' || key === 'service_tickets_efficiency' || key === 'earnings_efficiency' || key === 'quality_raw';
+  const hasSubtables = key === 'isp_recharge_raw' || key === 'service_tickets_raw' || key === 'pickup_tickets_raw' || key === 'quality_efficiency' || key === 'quality_health' || key === 'service_tickets_efficiency' || key === 'earnings_efficiency' || key === 'quality_raw' || key === 'pickup_tickets_efficiency';
   if ((!rows || rows.length === 0) && !hasSubtables) {
     document.getElementById('mainBody').innerHTML =
       '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
@@ -369,11 +369,6 @@ function loadMetric(key, wfName, type) {
       if (clRow) combined = combined.concat([clRow]);
     }
     html = buildTableHtml(combined, cols, isRates, null, isHealthView);
-    const absCounts = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['put_health_absolute_counts'] : null;
-    if (absCounts && absCounts.length > 0) {
-      html += '<div class="section-label" style="margin-top:36px">Absolute Counts</div>';
-      html += buildTableHtml(absCounts, ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','30D Avg','30D Median','30D P90'], false);
-    }
   }
 
   if (key === 'earnings_health') {
@@ -543,6 +538,24 @@ function loadMetric(key, wfName, type) {
         html += buildDailyTableHtml(d);
       }
     });
+    if (!html) {
+      html = '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
+    }
+  }
+
+  if (key === 'pickup_tickets_efficiency') {
+    html = '';
+    const PUT_EFF_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','30D Avg','30D Median','30D P90'];
+    const putCounts = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['pickup_tickets_counts'] : null;
+    if (putCounts && putCounts.length > 0) {
+      html += '<div class="section-label">Pickup Ticket Counts</div>';
+      html += buildTableHtml(putCounts, PUT_EFF_COLS, false, null, false);
+    }
+    const putAssign = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['pickup_tickets_assignment'] : null;
+    if (putAssign && putAssign.length > 0) {
+      html += '<div class="section-label" style="margin-top:36px">Assignment & Closure Breakdown</div>';
+      html += buildTableHtml(putAssign, PUT_EFF_COLS, false, null, false);
+    }
     if (!html) {
       html = '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
     }
