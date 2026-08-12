@@ -5927,6 +5927,12 @@ def _build_all_file_queries():
         "whr_netbox_auto_return": "whr_netbox_auto_return.sql",
         "whr_payments_no_adhoc": "whr_payments_no_adhoc.sql",
         "adhoc_payments_breakdown": "adhoc_payments_breakdown.sql",
+        "wer_routing_efficiency": "wer_routing_efficiency.sql",
+        "wer_install_within_sla": "wer_install_within_sla.sql",
+        "wer_r1_plan_24h": "wer_r1_plan_24h.sql",
+        "wer_isp_no_ping_24h": "wer_isp_no_ping_24h.sql",
+        "wer_service_resolved_sla": "wer_service_resolved_sla.sql",
+        "wer_put_resolution": "wer_put_resolution.sql",
     })
     return d
 

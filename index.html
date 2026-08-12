@@ -250,6 +250,9 @@ function buildSidebar() {
   const nav = document.getElementById('sidebarNav');
   nav.innerHTML = `<div class="wf-item whr-top" data-key="weekly_health_review" onclick="loadMetric('weekly_health_review','Weekly Health Review','')">
     <span class="dot-health" style="background:#10b981"></span> Weekly Health Review
+  </div>
+  <div class="wf-item whr-top" data-key="weekly_efficiency_review" onclick="loadMetric('weekly_efficiency_review','Weekly Efficiency Review','')">
+    <span class="dot-health" style="background:#6366f1"></span> Weekly Efficiency Review
   </div>` + WORKFLOWS.map(wf => `
     <div class="wf-group" data-wf="${wf.id}">
       <button class="wf-toggle" onclick="toggleGroup('${wf.id}')">
@@ -300,7 +303,7 @@ function loadMetric(key, wfName, type) {
 
   const rows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[key] : null;
 
-  const hasSubtables = key === 'isp_recharge_raw' || key === 'service_tickets_raw' || key === 'pickup_tickets_raw' || key === 'quality_efficiency' || key === 'quality_health' || key === 'service_tickets_efficiency' || key === 'earnings_efficiency' || key === 'quality_raw' || key === 'pickup_tickets_efficiency' || key === 'weekly_health_review';
+  const hasSubtables = key === 'isp_recharge_raw' || key === 'service_tickets_raw' || key === 'pickup_tickets_raw' || key === 'quality_efficiency' || key === 'quality_health' || key === 'service_tickets_efficiency' || key === 'earnings_efficiency' || key === 'quality_raw' || key === 'pickup_tickets_efficiency' || key === 'weekly_health_review' || key === 'weekly_efficiency_review';
   if ((!rows || rows.length === 0) && !hasSubtables) {
     document.getElementById('mainBody').innerHTML =
       '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
@@ -811,6 +814,142 @@ function loadMetric(key, wfName, type) {
         t += '</tr>';
       });
       t += '</tbody></table></div>';
+      html = t;
+    }
+  }
+
+  if (key === 'weekly_efficiency_review') {
+    const WER_COLS = ['D-1','D-2','D-3','W-1','W-2','W-3','M-1','M-2','M-3'];
+    const WER_PUT_COLS = ['T-22','T-23','T-24','T-25','T-26','T-27','T-28','T-29'];
+    const WER_CONFIG = [
+      { key: 'wer_routing_efficiency', match: null, name: 'Routing Efficiency %', desc: 'First CSP to receive booking accepts' },
+      { key: 'wer_install_within_sla', match: 'Install- On Slot Date %', name: 'Install — On Slot Date %', desc: 'Installation done on confirmed slot date' },
+      { key: 'wer_install_within_sla', match: 'Install- Before Slot Date %', name: 'Install — Before Slot Date %', desc: 'Installation done before confirmed slot date' },
+      { key: 'wer_r1_plan_24h', match: null, name: '% R1 Plan Purchased within 24h', desc: 'Plan purchased within 24h of free plan expiry' },
+      { key: 'wer_isp_no_ping_24h', match: null, name: 'ISP — % No Ping 24h', desc: '% of recharges with no ping within 24h' },
+    ];
+    // Query 5: expandable service ticket SLA rows
+    const WER_SLA_KEY = 'wer_service_resolved_sla';
+
+    function getWerRow(cfg) {
+      const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[cfg.key] : null;
+      if (!d || d.length === 0) return null;
+      if (cfg.match) return d.find(r => (r.Metric || r.metric || r.ENTRY_TYPE || r.kpi || r.KPI || '') === cfg.match) || null;
+      return d[0];
+    }
+
+    const resolvedRows = WER_CONFIG.map(cfg => ({ cfg, data: getWerRow(cfg) }));
+    const slaData = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[WER_SLA_KEY] : null;
+    const putData = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['wer_put_resolution'] : null;
+    const hasData = resolvedRows.some(r => r.data) || (slaData && slaData.length > 0) || (putData && putData.length > 0);
+
+    if (!hasData) {
+      html = '<div class="no-data"><p>No WER data loaded yet.<br>Run <code>python refresh_workflows.py --only=wer_routing_efficiency,wer_install_within_sla,wer_r1_plan_24h,wer_isp_no_ping_24h,wer_service_resolved_sla,wer_put_resolution</code></p></div>';
+    } else {
+      function werCellStyle(v) {
+        const n = parseFloat(v);
+        if (isNaN(n)) return '';
+        if (n < 50) return ' style="background:rgba(239,68,68,0.15);color:#ef4444;font-weight:600"';
+        if (n < 80) return ' style="background:rgba(245,158,11,0.12);color:#f59e0b;font-weight:600"';
+        return '';
+      }
+
+      let t = '<style>.wer-tbl{border-collapse:collapse;width:100%;font-size:12px;table-layout:fixed}'
+        + '.wer-tbl th,.wer-tbl td{padding:5px 6px;border-bottom:1px solid var(--border,#e5e7eb);text-align:right}'
+        + '.wer-tbl th{font-size:11px;font-weight:600;text-transform:uppercase;color:var(--fg-dim,#6b7280);position:sticky;top:0;background:var(--bg,#fff);z-index:1}'
+        + '.wer-tbl td:nth-child(1){text-align:center;color:var(--fg-dim);width:24px}'
+        + '.wer-tbl td:nth-child(2){text-align:left;font-weight:500;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
+        + '.wer-tbl th:nth-child(2){text-align:left}'
+        + '.wer-tbl td:nth-child(3){text-align:left;font-size:10.5px;color:var(--fg-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px}'
+        + '.wer-tbl th:nth-child(3){text-align:left}'
+        + '.wer-tbl tbody tr:hover{background:var(--sidebar-hover,#f3f4f6)}'
+        + '.wer-tbl tbody tr:hover td:nth-child(3){white-space:normal;overflow:visible;position:relative;z-index:2}'
+        + '.wer-expand-btn{cursor:pointer;user-select:none;color:var(--accent,#6366f1)}'
+        + '.wer-sub-row{display:none}'
+        + '.wer-sub-row td:nth-child(2){padding-left:24px;font-weight:400;font-style:italic}'
+        + '</style>';
+
+      // ── Main metrics table (queries 1-4) ──
+      t += '<div style="overflow-x:auto"><table class="wer-tbl"><thead><tr>';
+      t += '<th style="width:24px">#</th><th style="width:220px">KPI</th><th style="width:120px">Desc</th>';
+      WER_COLS.forEach(c => { t += '<th>' + c + '</th>'; });
+      t += '</tr></thead><tbody>';
+      let rowIdx = 0;
+      resolvedRows.forEach(r => {
+        rowIdx++;
+        t += '<tr><td>' + rowIdx + '</td>';
+        t += '<td title="' + r.cfg.name + '">' + r.cfg.name + '</td>';
+        t += '<td title="' + r.cfg.desc + '">' + r.cfg.desc + '</td>';
+        WER_COLS.forEach(c => {
+          const v = r.data ? r.data[c] : null;
+          const n = parseFloat(v);
+          const display = !isNaN(n) ? n.toFixed(1) : '—';
+          t += '<td' + werCellStyle(v) + '>' + display + '</td>';
+        });
+        t += '</tr>';
+      });
+
+      // ── Query 5: Service Ticket Resolved within SLA (expandable) ──
+      if (slaData && slaData.length > 0) {
+        rowIdx++;
+        const aggRow = slaData[0]; // first row = aggregate "% Resolved Within TAT"
+        const subRows = slaData.slice(1);
+        const slaId = 'wer-sla-expand';
+        t += '<tr><td>' + rowIdx + '</td>';
+        t += '<td title="Service Ticket Resolved within SLA">';
+        if (subRows.length > 0) {
+          t += '<span class="wer-expand-btn" onclick="document.querySelectorAll(\'.' + slaId + '\').forEach(r=>r.style.display=r.style.display===\'table-row\'?\'none\':\'table-row\')">';
+          t += '▶ ';
+          t += '</span>';
+        }
+        t += (aggRow.ENTRY_TYPE || aggRow.Metric || 'Resolved Within TAT %') + '</td>';
+        t += '<td title="Aggregate across all subtypes">Aggregate — all subtypes</td>';
+        WER_COLS.forEach(c => {
+          const v = aggRow[c];
+          const n = parseFloat(v);
+          const display = !isNaN(n) ? n.toFixed(1) : '—';
+          t += '<td' + werCellStyle(v) + '>' + display + '</td>';
+        });
+        t += '</tr>';
+        // Sub-rows (hidden by default)
+        subRows.forEach(sr => {
+          t += '<tr class="wer-sub-row ' + slaId + '">';
+          t += '<td></td>';
+          t += '<td title="' + (sr.ENTRY_TYPE || '') + '">' + (sr.ENTRY_TYPE || sr.Metric || '') + '</td>';
+          t += '<td></td>';
+          WER_COLS.forEach(c => {
+            const v = sr[c];
+            const n = parseFloat(v);
+            const display = !isNaN(n) ? n.toFixed(1) : '—';
+            t += '<td' + werCellStyle(v) + '>' + display + '</td>';
+          });
+          t += '</tr>';
+        });
+      }
+
+      t += '</tbody></table></div>';
+
+      // ── Query 6: PUT Resolution (separate sub-view, different columns) ──
+      if (putData && putData.length > 0) {
+        t += '<div class="section-label" style="margin-top:36px">PUT Resolution (21-day cohort)</div>';
+        t += '<div style="overflow-x:auto"><table class="wer-tbl"><thead><tr>';
+        t += '<th style="width:24px">#</th><th style="width:260px">Metric</th>';
+        WER_PUT_COLS.forEach(c => { t += '<th>' + c + '</th>'; });
+        t += '</tr></thead><tbody>';
+        putData.forEach((r, i) => {
+          t += '<tr><td>' + (i+1) + '</td>';
+          t += '<td title="' + (r.Metric || '') + '">' + (r.Metric || '') + '</td>';
+          WER_PUT_COLS.forEach(c => {
+            const v = r[c];
+            const n = parseFloat(v);
+            const display = !isNaN(n) ? n.toFixed(1) : '—';
+            t += '<td' + werCellStyle(v) + '>' + display + '</td>';
+          });
+          t += '</tr>';
+        });
+        t += '</tbody></table></div>';
+      }
+
       html = t;
     }
   }
