@@ -338,6 +338,12 @@ function loadMetric(key, wfName, type) {
       html += '<div class="section-label" style="margin-top:36px">Payment Modewise Success Rate</div>';
       html += buildMultiLabelTableHtml(modeRaw, ['Mode','Metric'], MODE_COLS, false);
     }
+    const adhocData = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['adhoc_payments_breakdown'] : null;
+    if (adhocData && adhocData.length > 0) {
+      const ADHOC_COLS = ['D-1','D-2','D-3','D-4','D-5','D-6','D-7','D-8','W-1','W-2','M-1','M-2'];
+      html += '<div class="section-label" style="margin-top:36px">Adhoc Payments — Subtype Breakdown</div>';
+      html += buildTableHtml(adhocData, ADHOC_COLS, false);
+    }
   }
 
   if (key === 'isp_recharge_efficiency') {

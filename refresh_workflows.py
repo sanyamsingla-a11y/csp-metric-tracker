@@ -5926,6 +5926,7 @@ def _build_all_file_queries():
         "whr_error_free_computation": "whr_error_free_computation.sql",
         "whr_netbox_auto_return": "whr_netbox_auto_return.sql",
         "whr_payments_no_adhoc": "whr_payments_no_adhoc.sql",
+        "adhoc_payments_breakdown": "adhoc_payments_breakdown.sql",
     })
     return d
 
