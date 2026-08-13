@@ -253,7 +253,10 @@ function buildSidebar() {
   </div>
   <div class="wf-item whr-top" data-key="weekly_efficiency_review" onclick="loadMetric('weekly_efficiency_review','Weekly Efficiency Review','')">
     <span class="dot-health" style="background:#6366f1"></span> Weekly Efficiency Review
-  </div>` + WORKFLOWS.map(wf => `
+  </div>
+  <a class="wf-item whr-top" href="https://wiom-ivr-ops-dashboard.vercel.app/non-phase1" target="_blank" rel="noopener" style="text-decoration:none;color:inherit;display:flex;align-items:center">
+    <span class="dot-health" style="background:#f59e0b"></span> Non IVR View ↗
+  </a>` + WORKFLOWS.map(wf => `
     <div class="wf-group" data-wf="${wf.id}">
       <button class="wf-toggle" onclick="toggleGroup('${wf.id}')">
         <svg class="chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
