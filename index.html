@@ -235,6 +235,7 @@ const WORKFLOWS = [
   { id: 'device_ordering',  name: 'Device Ordering',    health: 'device_ordering_health',  efficiency: 'device_ordering_efficiency' },
   { id: 'earnings',         name: 'Earnings',           health: 'earnings_health',         efficiency: 'earnings_efficiency',        raw: 'earnings_raw' },
   { id: 'ivr_ops',          name: 'IVR Ops (Phase 1)',  health: 'ivr_ops_phase1',          iframe: 'https://wiom-ivr-ops-dashboard.vercel.app/phase1' },
+  { id: 'non_ivr',          name: 'Non IVR View',       health: 'non_ivr_view',            iframe: 'https://wiom-ivr-ops-dashboard.vercel.app/non-phase1' },
 ];
 
 const COLS_HEALTH = ['Today','T-1','T-2','T-3','T-4','T-5','T-6','T-7','Average','Median','P90'];
@@ -254,9 +255,7 @@ function buildSidebar() {
   <div class="wf-item whr-top" data-key="weekly_efficiency_review" onclick="loadMetric('weekly_efficiency_review','Weekly Efficiency Review','')">
     <span class="dot-health" style="background:#6366f1"></span> Weekly Efficiency Review
   </div>
-  <a class="wf-item whr-top" href="https://wiom-ivr-ops-dashboard.vercel.app/non-phase1" target="_blank" rel="noopener" style="text-decoration:none;color:inherit;display:flex;align-items:center">
-    <span class="dot-health" style="background:#f59e0b"></span> Non IVR View ↗
-  </a>` + WORKFLOWS.map(wf => `
+` + WORKFLOWS.map(wf => `
     <div class="wf-group" data-wf="${wf.id}">
       <button class="wf-toggle" onclick="toggleGroup('${wf.id}')">
         <svg class="chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
