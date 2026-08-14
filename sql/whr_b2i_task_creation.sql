@@ -36,8 +36,8 @@ tas_created AS (
 daily_conn AS (
   SELECT bb.booking_date AS dt,
     COUNT(DISTINCT bb.MOBILE)                                                          AS total_bookings,
-    COUNT(DISTINCT CASE WHEN dwc.CONNECTION_ID IS NOT NULL THEN bb.MOBILE END)  AS das_with_csp_count,
-    COUNT(DISTINCT CASE WHEN tc.CONNECTION_ID IS NOT NULL THEN bb.MOBILE END)    AS tas_count
+    COUNT(DISTINCT CASE WHEN dwc.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)  AS das_with_csp_count,
+    COUNT(DISTINCT CASE WHEN tc.CONNECTION_ID IS NOT NULL THEN bb.CONNECTION_ID END)    AS tas_count
   FROM bookings_base bb
   LEFT JOIN das_with_csp dwc ON dwc.CONNECTION_ID = bb.CONNECTION_ID
   LEFT JOIN tas_created  tc  ON tc.CONNECTION_ID  = bb.CONNECTION_ID
