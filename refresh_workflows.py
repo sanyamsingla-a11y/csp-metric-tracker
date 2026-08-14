@@ -863,17 +863,18 @@ candidate_level AS (
               AND ac.P41_DEADLINE_AT < CURRENT_TIMESTAMP
               AND ac.CURRENT_STATE = 'CANCELLED_BY_UPSTREAM'
              THEN 1 ELSE 0 END AS p41_timeout,
-        CASE WHEN ac.CONFIRMED_SLOT_AT IS NOT NULL
-              AND ac.P74_DEADLINE_AT IS NOT NULL
+        CASE WHEN ac.P74_DEADLINE_AT IS NOT NULL
               AND ac.P74_DEADLINE_AT < CURRENT_TIMESTAMP
-              AND COALESCE(ac.COMPLETED_STEP,0) < 8
-              AND ac.CURRENT_STATE NOT IN ('INSTALLATION_REPORTED_FAILED','CANCELLED_BY_CUSTOMER')
+              AND ac.CONFIRMED_SLOT_AT IS NOT NULL
+              AND ac.CURRENT_STATE NOT IN ('CONNECTION_ACTIVE','INSTALLATION_REPORTED_FAILED','CANCELLED_BY_CUSTOMER','DECLINED')
+              AND NOT (ac.CURRENT_STATE = 'CANCELLED_BY_UPSTREAM' AND COALESCE(ac.FAILURE_REASON,'') != 'TIMEOUT_P74')
              THEN 1 ELSE 0 END AS p74_eligible,
-        CASE WHEN ac.CONFIRMED_SLOT_AT IS NOT NULL
-              AND ac.P74_DEADLINE_AT IS NOT NULL
+        CASE WHEN ac.P74_DEADLINE_AT IS NOT NULL
               AND ac.P74_DEADLINE_AT < CURRENT_TIMESTAMP
-              AND COALESCE(ac.COMPLETED_STEP,0) < 8
-              AND ac.CURRENT_STATE = 'CANCELLED_BY_UPSTREAM'
+              AND ac.CONFIRMED_SLOT_AT IS NOT NULL
+              AND ac.CURRENT_STATE NOT IN ('CONNECTION_ACTIVE','INSTALLATION_REPORTED_FAILED','CANCELLED_BY_CUSTOMER','DECLINED')
+              AND NOT (ac.CURRENT_STATE = 'CANCELLED_BY_UPSTREAM' AND COALESCE(ac.FAILURE_REASON,'') != 'TIMEOUT_P74')
+              AND ac.FAILURE_REASON = 'TIMEOUT_P74'
              THEN 1 ELSE 0 END AS p74_timeout
     FROM all_candidates ac
     LEFT JOIN slot_timing st ON st.EXECUTION_CANDIDATE_ID = ac.EXECUTION_CANDIDATE_ID
@@ -945,8 +946,7 @@ rates_joined AS (
         cd.tech_assigned_not_self * 1.0 / NULLIF(cd.slot_confirmed, 0)   AS tech_not_self_rate,
         cd.tech_remind_sent * 1.0 / NULLIF(cd.slot_confirmed, 0)         AS tech_remind_rate,
         cd.tech_pn_delivered * 1.0 / NULLIF(cd.tech_assigned, 0)         AS tech_pn_delivery_rate,
-        cd.p74_timeout      * 1.0 / NULLIF(cd.p74_eligible, 0)           AS p74_timeout_rate,
-        cd.step_rating      * 1.0 / NULLIF(cd.step_otp_verified, 0)      AS conn_active_rate
+        cd.p74_timeout      * 1.0 / NULLIF(cd.p74_eligible, 0)           AS p74_timeout_rate
     FROM daily_conn dc
     JOIN daily_cand cd ON cd.booking_date = dc.booking_date
 ),
@@ -966,7 +966,6 @@ rates_long AS (
     UNION ALL SELECT 13, 'Tech Assigned (not self) Rate',   booking_date, tech_not_self_rate          FROM rates_joined
     UNION ALL SELECT 14, 'Tech PN Delivery Rate',           booking_date, tech_pn_delivery_rate       FROM rates_joined
     UNION ALL SELECT 15, 'P74 Timeout Rate',                booking_date, p74_timeout_rate            FROM rates_joined
-    UNION ALL SELECT 16, 'Connection Active Rate',          booking_date, conn_active_rate            FROM rates_joined
 )
 SELECT
     metric AS METRIC_NAME,
