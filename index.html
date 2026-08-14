@@ -810,8 +810,9 @@ function loadMetric(key, wfName, type) {
         WHR_COLS.forEach(c => {
           const v = r.data ? r.data[c] : null;
           const n = parseFloat(v);
-          const display = !isNaN(n) ? n.toFixed(1) : '—';
-          t += '<td' + cellStyle(v) + '>' + display + '</td>';
+          const capped = !isNaN(n) ? Math.min(n, 100) : NaN;
+          const display = !isNaN(capped) ? capped.toFixed(1) : '—';
+          t += '<td' + cellStyle(capped) + '>' + display + '</td>';
         });
         t += '</tr>';
       });
@@ -1069,7 +1070,7 @@ function downloadWhrCsv(e) {
       } else if (cfg.match) { row = d.find(r => (r.kpi || r.KPI || r.Metric || r.metric || '') === cfg.match); }
       else { row = d[0]; }
     }
-    csv += cfg.name.replace(/,/g,' ') + ',' + WHR_COLS.map(c => row && row[c] !== null && row[c] !== undefined ? row[c] : '').join(',') + '\n';
+    csv += cfg.name.replace(/,/g,' ') + ',' + WHR_COLS.map(c => { const v = row && row[c] !== null && row[c] !== undefined ? row[c] : ''; const n = parseFloat(v); return !isNaN(n) ? Math.min(n, 100) : v; }).join(',') + '\n';
   });
   const blob = new Blob([csv], {type: 'text/csv'});
   const url = URL.createObjectURL(blob);

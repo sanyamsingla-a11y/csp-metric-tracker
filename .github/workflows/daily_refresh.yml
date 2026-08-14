@@ -2,7 +2,7 @@ name: Daily Data Refresh
 
 on:
   schedule:
-    - cron: '30 2 * * *'  # 2:30 AM UTC = 8:00 AM IST
+    - cron: '0 3 * * *'   # 3:00 AM UTC = 8:30 AM IST
   workflow_dispatch:       # manual trigger from GitHub UI
 
 permissions:
