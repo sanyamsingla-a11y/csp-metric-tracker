@@ -393,7 +393,7 @@ function loadMetric(key, wfName, type) {
   if (key === 'earnings_health') {
     const cfDaily = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['earnings_carry_fee_daily'] : null;
     if (cfDaily && cfDaily.length > 0) {
-      html += '<div class="section-label">Carry Fee Daily Health Check</div>';
+      html += '<div class="section-label">Carry Fee Daily Health Check <a href="https://metabase.wiom.in/question/11915-carry-fee-ptl-view?csp_id=&csp_name=&region=&device_id=" target="_blank" style="font-size:12px;font-weight:400;color:#6366f1;margin-left:8px">Carry Fee PTL View ↗</a></div>';
       const cfSkip = ['date','DATE','cadence','CADENCE','gap_reason','GAP_REASON'];
       const cfCols = Object.keys(cfDaily[0]).filter(k => !cfSkip.includes(k));
       html += '<div class="table-wrap"><table><thead><tr>';
