@@ -99,9 +99,22 @@ dms_daily AS (
 
 csp_acc AS (
     SELECT d.dt, d.CSP_ID,
-        CASE WHEN d.dms_numer = i.iec_numer      THEN 1 ELSE 0 END AS numer_match,
-        CASE WHEN d.dms_denom = i.iec_denom      THEN 1 ELSE 0 END AS denom_match,
-        CASE WHEN d.dms_state = i.expected_state THEN 1 ELSE 0 END AS state_match
+        CASE
+            WHEN d.dms_numer = i.iec_numer                                            THEN 1
+            WHEN i.iec_numer IS NULL AND d.dms_numer IS NULL                          THEN 1
+            WHEN d.dms_state = 'INSUFFICIENT_DATA' AND i.expected_state = 'INSUFFICIENT_DATA' THEN 1
+            ELSE 0
+        END AS numer_match,
+        CASE
+            WHEN d.dms_denom = i.iec_denom                                            THEN 1
+            WHEN i.iec_denom IS NULL AND d.dms_denom = 0                              THEN 1
+            ELSE 0
+        END AS denom_match,
+        CASE
+            WHEN d.dms_state = i.expected_state                                       THEN 1
+            WHEN i.expected_state IS NULL AND d.dms_state = 'INSUFFICIENT_DATA'       THEN 1
+            ELSE 0
+        END AS state_match
     FROM dms_daily d
     LEFT JOIN iec_with_state i ON d.CSP_ID = i.CSP_ID AND d.dt = i.dt
 ),
