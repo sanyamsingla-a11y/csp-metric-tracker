@@ -394,16 +394,21 @@ function loadMetric(key, wfName, type) {
     const cfDaily = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['earnings_carry_fee_daily'] : null;
     if (cfDaily && cfDaily.length > 0) {
       html += '<div class="section-label">Carry Fee Daily Health Check</div>';
-      const cfCols = Object.keys(cfDaily[0]).filter(k => k !== 'date' && k !== 'cadence');
+      const cfSkip = ['date','DATE','cadence','CADENCE','gap_reason','GAP_REASON'];
+      const cfCols = Object.keys(cfDaily[0]).filter(k => !cfSkip.includes(k));
       html += '<div class="table-wrap"><table><thead><tr>';
       html += '<th>Date</th><th>Cadence</th>';
-      cfCols.forEach(c => { html += '<th>' + c + '</th>'; });
+      cfCols.forEach(c => { html += '<th>' + c.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase()) + '</th>'; });
+      html += '<th>Gap Reason</th>';
       html += '</tr></thead><tbody>';
       cfDaily.forEach(row => {
-        const gapVal = row.device_gap || row.DEVICE_GAP || 0;
+        const gapVal = row.device_gap ?? row.DEVICE_GAP ?? 0;
         const cls = gapVal === 0 ? '' : (Math.abs(gapVal) <= 10 ? ' class="warn"' : ' class="bad"');
-        html += '<tr' + cls + '><td>' + row.date + '</td><td>' + (row.cadence || '') + '</td>';
+        const dt = (row.date || row.DATE || '').toString().slice(0,10).split('-');
+        const fmtDate = dt.length === 3 ? dt[2]+'-'+dt[1]+'-'+dt[0] : (row.date || row.DATE || '');
+        html += '<tr' + cls + '><td>' + fmtDate + '</td><td>' + (row.cadence || row.CADENCE || '') + '</td>';
         cfCols.forEach(c => { html += '<td>' + (row[c] != null ? row[c] : '—') + '</td>'; });
+        html += '<td style="font-size:12px;max-width:300px">' + (row.gap_reason || row.GAP_REASON || '') + '</td>';
         html += '</tr>';
       });
       html += '</tbody></table></div>';
@@ -691,7 +696,9 @@ function loadMetric(key, wfName, type) {
       });
       Object.keys(cohorts).sort().forEach(cd => {
         const rows = cohorts[cd];
-        html += '<div style="margin-top:18px;font-weight:600;font-size:14px;color:var(--text-primary,#1e293b)">Cohort: ' + cd + '</div>';
+        const cdParts = cd.toString().slice(0,10).split('-');
+        const cdFmt = cdParts.length === 3 ? cdParts[2]+'-'+cdParts[1]+'-'+cdParts[0] : cd;
+        html += '<div style="margin-top:18px;font-weight:600;font-size:14px;color:var(--text-primary,#1e293b)">Cohort: ' + cdFmt + '</div>';
         html += '<div class="table-wrap"><table><thead><tr>';
         html += '<th>Region</th><th>State</th>';
         CF_DAY_COLS.forEach(c => { html += '<th>' + c + '</th>'; });
