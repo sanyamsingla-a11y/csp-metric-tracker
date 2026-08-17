@@ -5892,6 +5892,8 @@ def _build_all_file_queries():
         "service_tickets_resolution_tat": "service_tickets_resolution_tat.sql",
         "earnings_trend_mom": "earnings_trend_mom.sql",
         "earnings_csp_conn_level": "earnings_csp_conn_level.sql",
+        "earnings_carry_fee_daily": "earnings_carry_fee_daily.sql",
+        "earnings_carry_fee_tracker": "earnings_carry_fee_tracker.sql",
         "quality_m1_comp_acc": "quality_m1_comp_acc.sql",
         "quality_m2_comp_acc": "quality_m2_comp_acc.sql",
         "quality_m3_comp_acc": "quality_m3_comp_acc.sql",

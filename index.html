@@ -391,6 +391,23 @@ function loadMetric(key, wfName, type) {
   }
 
   if (key === 'earnings_health') {
+    const cfDaily = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['earnings_carry_fee_daily'] : null;
+    if (cfDaily && cfDaily.length > 0) {
+      html += '<div class="section-label">Carry Fee Daily Health Check</div>';
+      const cfCols = Object.keys(cfDaily[0]).filter(k => k !== 'date' && k !== 'cadence');
+      html += '<div class="table-wrap"><table><thead><tr>';
+      html += '<th>Date</th><th>Cadence</th>';
+      cfCols.forEach(c => { html += '<th>' + c + '</th>'; });
+      html += '</tr></thead><tbody>';
+      cfDaily.forEach(row => {
+        const gapVal = row.device_gap || row.DEVICE_GAP || 0;
+        const cls = gapVal === 0 ? '' : (Math.abs(gapVal) <= 10 ? ' class="warn"' : ' class="bad"');
+        html += '<tr' + cls + '><td>' + row.date + '</td><td>' + (row.cadence || '') + '</td>';
+        cfCols.forEach(c => { html += '<td>' + (row[c] != null ? row[c] : '—') + '</td>'; });
+        html += '</tr>';
+      });
+      html += '</tbody></table></div>';
+    }
     const tdsHop = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['earnings_tds_hop_rates'] : null;
     if (tdsHop && tdsHop.length > 0) {
       html += '<div class="section-label">TDS Hygiene (%)</div>';
@@ -658,6 +675,41 @@ function loadMetric(key, wfName, type) {
     if (cspConnRows && cspConnRows.length > 0) {
       html += '<div class="section-label" style="margin-top:36px">Earnings at CSP and Connection Level</div>';
       html += buildTableHtml(cspConnRows, EARN_MOM_COLS, false, null, false);
+    }
+    // Carry Fee Cohort State Tracker
+    const cfTracker = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['earnings_carry_fee_tracker'] : null;
+    if (cfTracker && cfTracker.length > 0) {
+      html += '<div class="section-label" style="margin-top:36px">Carry Fee — Cohort State Tracker</div>';
+      html += '<p style="margin:0 0 8px 0;font-size:13px;color:var(--text-secondary,#6b7280)">Tracks device state transitions from cadence date. Each cohort = new devices entering carry fee on that cadence. <a href="https://metabase.wiom.in/question/11913-device-moved-to-retrieval-after-carry-fee" target="_blank" style="color:#6366f1">Returned Devices Raw Data ↗</a></p>';
+      const CF_DAY_COLS = ['D-1','D0','D1','D2','D3','D4','D5','D6','D7','D8','D9','D10','D11','D12','D13','D14','D15','D16','D17','D18','D19','D20','D21','D22','D23','D24','D25','D26','D27','D28','D29'];
+      // Group by cohort_date
+      const cohorts = {};
+      cfTracker.forEach(r => {
+        const cd = r.cohort_date || r.COHORT_DATE;
+        if (!cohorts[cd]) cohorts[cd] = [];
+        cohorts[cd].push(r);
+      });
+      Object.keys(cohorts).sort().forEach(cd => {
+        const rows = cohorts[cd];
+        html += '<div style="margin-top:18px;font-weight:600;font-size:14px;color:var(--text-primary,#1e293b)">Cohort: ' + cd + '</div>';
+        html += '<div class="table-wrap"><table><thead><tr>';
+        html += '<th>Region</th><th>State</th>';
+        CF_DAY_COLS.forEach(c => { html += '<th>' + c + '</th>'; });
+        html += '<th>Cohort Size</th>';
+        html += '</tr></thead><tbody>';
+        rows.forEach(row => {
+          const region = row.region || row.REGION || '';
+          const state = row.state || row.STATE || '';
+          html += '<tr><td>' + region + '</td><td>' + state + '</td>';
+          CF_DAY_COLS.forEach(c => {
+            const v = row[c];
+            html += '<td>' + (v != null && v !== 0 ? v : (v === 0 ? '0' : '—')) + '</td>';
+          });
+          const cs = row.cohort_size || row.COHORT_SIZE || '';
+          html += '<td>' + cs + '</td></tr>';
+        });
+        html += '</tbody></table></div>';
+      });
     }
     if (!html) {
       html = '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
