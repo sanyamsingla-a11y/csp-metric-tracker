@@ -5945,9 +5945,22 @@ def refresh(only_keys=None):
     """Refresh workflow data. If only_keys is set, only run those queries and merge into existing data."""
     ts = datetime.now().strftime("%Y-%m-%d %H:%M IST")
 
-    # ── Load existing data if doing a partial refresh ──
+    # ── For partial refresh, pull latest remote first to avoid stale keys ──
     out_path = os.path.join(DIR, "workflow_data.js")
     if only_keys:
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["git", "pull", "--rebase", "origin", "master"],
+                cwd=DIR, capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                print("  Git pull: up to date with remote")
+            else:
+                print(f"  Git pull warning: {result.stderr.strip()}")
+        except Exception as e:
+            print(f"  Git pull skipped: {e}")
+
         try:
             with open(out_path) as f:
                 content = f.read()
