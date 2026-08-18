@@ -3640,7 +3640,8 @@ SELECT * FROM (
       FROM PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA ed
       JOIN PROD_DB.CLEVERTAP_CSP_API.PROFILE_DATA pd ON ed.clevertap_id = pd.clevertap_id
       WHERE ed.event_name = 'pn_delivered'
-        AND PARSE_JSON(properties):wzrk_id::STRING LIKE '1778236503%'
+        AND SPLIT_PART(PARSE_JSON(properties):wzrk_id::STRING, '_', 1)
+            IN ('1778236503', '1786004220')   -- old campaign (≤06-Aug) + replacement (06-Aug→)
     ) pn
     JOIN PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RESTORE_EXECUTION_CANDIDATES rec
       ON pn.exec_cand_id = rec.EXECUTION_CANDIDATE_ID
@@ -4209,7 +4210,9 @@ csp_pn AS (
     SELECT PARSE_JSON(properties):execution_id::STRING AS exec_cand_id
     FROM PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA ed
     JOIN PROD_DB.CLEVERTAP_CSP_API.PROFILE_DATA pd ON ed.clevertap_id = pd.clevertap_id
-    WHERE ed.event_name = 'pn_delivered' AND PARSE_JSON(properties):wzrk_id::STRING LIKE '1778236503%'
+    WHERE ed.event_name = 'pn_delivered'
+      AND SPLIT_PART(PARSE_JSON(properties):wzrk_id::STRING, '_', 1)
+          IN ('1778236503', '1786004220')
   ) pn
   JOIN PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RESTORE_EXECUTION_CANDIDATES rec ON pn.exec_cand_id = rec.EXECUTION_CANDIDATE_ID
   JOIN complaints c ON rec.COMPLAINT_ID = c.complaint_id
