@@ -43,7 +43,7 @@ agg AS (
          WHEN entry_type = 'SLOW_INTERNET' THEN 4
          WHEN entry_type = 'OPTICAL_POWER_OUT_OF_RANGE' THEN 5
          WHEN entry_type = 'SHIFTING' THEN 6
-         ELSE 7 END AS rk,
+         END AS rk,
     p.period, p.sk,
     ROUND(100.0 * SUM(CASE WHEN b.WITHIN_TAT = 1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1) AS pct
   FROM (
@@ -66,5 +66,6 @@ SELECT
   MAX(CASE WHEN period='M-2' THEN pct END) AS "M-2",
   MAX(CASE WHEN period='M-3' THEN pct END) AS "M-3"
 FROM agg
+WHERE rk IS NOT NULL
 GROUP BY ENTRY_TYPE, rk
 ORDER BY rk
