@@ -2890,16 +2890,17 @@ FROM m2_daily
 
 QUERIES["isp_recharge_efficiency"] = r"""
 WITH params AS (
-  SELECT DATE(CONVERT_TIMEZONE('UTC','Asia/Kolkata',CURRENT_TIMESTAMP())) AS today
+  SELECT DATE(CONVERT_TIMEZONE('Asia/Kolkata',CURRENT_TIMESTAMP())) AS today
 ),
+/* All reasons (PROACTIVE + REACTIVE). Metric 1 filters to PROACTIVE downstream;
+   metric 3 uses the full universe, as in the original query. */
 obl AS (
-  SELECT CONNECTION_ID AS cid, REASON,
-         TO_DATE(DATEADD(minute,330,CREATED_AT))       AS ob_date,
-         DATEDIFF('hour', CREATED_AT, WINDOW_END)/24.0 AS days_before_expiry
+  SELECT CONNECTION_ID AS cid, REASON, STATUS, RESOLVED_AT,
+         TO_DATE(CONVERT_TIMEZONE('Asia/Kolkata',CREATED_AT))  AS ob_date,
+         DATEDIFF('hour', CREATED_AT, WINDOW_END)/24.0         AS days_before_expiry
   FROM CSP_CUSTOMER_ACCESS_SERVICE_CSP_CUSTOMER_ACCESS_SERVICE.SUPPLY_RECHARGE_OBLIGATIONS
   WHERE _FIVETRAN_ACTIVE
     AND STATUS IN ('OPEN','RESOLVED')
-    AND REASON = 'PROACTIVE'
     AND CREATED_AT >= DATEADD('day',-15,CURRENT_DATE())
 ),
 recharged AS (
@@ -2924,11 +2925,15 @@ ontime AS (
 ),
 per_day AS (
   SELECT
-    o.ob_date                                                 AS d,
-    COUNT(*)                                                  AS obligations,
-    SUM(IFF(ot.cid IS NOT NULL,1,0))                          AS ontime,
-    SUM(IFF(r.cid  IS NOT NULL,1,0))                          AS recharged,
-    SUM(IFF(r.cid  IS NOT NULL AND res.cid IS NOT NULL,1,0))  AS resumed_recharged
+    o.ob_date                                                          AS d,
+    /* metric 1 universe: proactive only */
+    COUNT_IF(o.REASON='PROACTIVE')                                     AS obligations_proactive,
+    COUNT_IF(o.REASON='PROACTIVE' AND ot.cid IS NOT NULL)              AS ontime,
+    /* metric 3 universe: all reasons, cohort-to-date completion */
+    COUNT(*)                                                           AS obligations_all,
+    COUNT_IF(o.STATUS='RESOLVED')                                      AS completed_to_date,
+    COUNT_IF(r.cid IS NOT NULL)                                        AS recharged,
+    COUNT_IF(r.cid IS NOT NULL AND res.cid IS NOT NULL)                AS resumed_recharged
   FROM obl o
   LEFT JOIN recharged r  ON r.cid=o.cid
   LEFT JOIN resumed  res ON res.cid=o.cid
@@ -2938,9 +2943,9 @@ per_day AS (
 daily_rates AS (
   SELECT
     d,
-    ROUND(100.0*ontime    /NULLIF(obligations,0),1) AS ontime_rate,
-    ROUND(100.0*recharged /NULLIF(obligations,0),1) AS recharge_rate,
-    ROUND(100.0*resumed_recharged/NULLIF(recharged,0),1) AS resume_rate
+    ROUND(100.0*ontime            /NULLIF(obligations_proactive,0),1) AS ontime_rate,
+    ROUND(100.0*completed_to_date /NULLIF(obligations_all,0),1)       AS recharge_rate,
+    ROUND(100.0*resumed_recharged /NULLIF(recharged,0),1)             AS resume_rate
   FROM per_day
 ),
 date_range AS (
@@ -3067,7 +3072,7 @@ FROM (
     pa_d1, pa_d2, pa_d3, pa_d4, pa_d5, pa_d6, pa_d7, pa_d8, pa_avg, pa_med, pa_p90
   FROM isp_agg
   UNION ALL
-  SELECT 3, 'Recharge Completion Rate',
+  SELECT 3, 'Recharge Completion Rate(all tickets created that day, % recharged till date)',
     rc_d1, rc_d2, rc_d3, rc_d4, rc_d5, rc_d6, rc_d7, rc_d8, rc_avg, rc_med, rc_p90
   FROM agg
   UNION ALL
