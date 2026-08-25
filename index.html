@@ -963,12 +963,31 @@ function loadMetric(key, wfName, type) {
         t += '<th style="width:24px">#</th><th style="width:260px">Entry Type</th>';
         WER_SLA_COLS.forEach(c => { t += '<th>' + c + '</th>'; });
         t += '</tr></thead><tbody>';
-        slaData.forEach((sr, i) => {
+        const aggRow = slaData[0];
+        const subRows = slaData.slice(1);
+        // Row 1: aggregate with expand arrow
+        const aggLabel = aggRow['Entry Type'] || aggRow.ENTRY_TYPE || aggRow.Metric || '% Resolved within TAT';
+        t += '<tr style="font-weight:600"><td>1</td>';
+        t += '<td title="' + aggLabel + '">';
+        if (subRows.length > 0) {
+          t += '<span class="wer-expand-btn" onclick="document.querySelectorAll(\'.' + slaId + '\').forEach(r=>r.style.display=r.style.display===\'table-row\'?\'none\':\'table-row\');this.textContent=this.textContent.trim()===\'▶\'?\'▼ \':\'▶ \'">';
+          t += '▶ ';
+          t += '</span>';
+        }
+        t += aggLabel + '</td>';
+        WER_SLA_COLS.forEach(c => {
+          const v = aggRow[c];
+          const n = parseFloat(v);
+          const display = !isNaN(n) ? n.toFixed(1) : '—';
+          t += '<td' + werCellStyle(v) + '>' + display + '</td>';
+        });
+        t += '</tr>';
+        // Sub-rows: hidden by default
+        subRows.forEach((sr, i) => {
           const label = sr['Entry Type'] || sr.ENTRY_TYPE || sr.Metric || '';
-          const isAgg = label.toLowerCase().includes('resolved within tat');
-          t += '<tr' + (isAgg ? ' style="font-weight:600"' : '') + '>';
-          t += '<td>' + (i+1) + '</td>';
-          t += '<td title="' + label + '">' + label + '</td>';
+          t += '<tr class="wer-sub-row ' + slaId + '">';
+          t += '<td>' + (i+2) + '</td>';
+          t += '<td style="padding-left:24px;font-style:italic" title="' + label + '">' + label + '</td>';
           WER_SLA_COLS.forEach(c => {
             const v = sr[c];
             const n = parseFloat(v);
