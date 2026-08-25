@@ -883,6 +883,7 @@ function loadMetric(key, wfName, type) {
 
   if (key === 'weekly_efficiency_review') {
     const WER_COLS = ['D-1','D-2','D-3','W-1','W-2','W-3','M-1','M-2','M-3'];
+    const WER_SLA_COLS = ['D-2','D-3','D-4','Week-1','Week-2','Week-3','M-1','M-2','M-3'];
     const WER_PUT_COLS = ['T-22','T-23','T-24','T-25','T-26','T-27','T-28','T-29'];
     const WER_CONFIG = [
       { key: 'wer_routing_efficiency', match: null, name: 'Routing Efficiency %', desc: 'First CSP to receive booking accepts' },
@@ -952,35 +953,23 @@ function loadMetric(key, wfName, type) {
         t += '</tr>';
       });
 
-      // ── Query 5: Service Ticket Resolved within SLA (expandable) ──
+      t += '</tbody></table></div>';
+
+      // ── Query 5: Service Ticket Resolved within TAT (separate table, own columns) ──
       if (slaData && slaData.length > 0) {
-        rowIdx++;
-        const aggRow = slaData[0]; // first row = aggregate "% Resolved Within TAT"
-        const subRows = slaData.slice(1);
         const slaId = 'wer-sla-expand';
-        t += '<tr><td>' + rowIdx + '</td>';
-        t += '<td title="Service Ticket Resolved within SLA">';
-        if (subRows.length > 0) {
-          t += '<span class="wer-expand-btn" onclick="document.querySelectorAll(\'.' + slaId + '\').forEach(r=>r.style.display=r.style.display===\'table-row\'?\'none\':\'table-row\')">';
-          t += '▶ ';
-          t += '</span>';
-        }
-        t += (aggRow.ENTRY_TYPE || aggRow.Metric || 'Resolved Within TAT %') + '</td>';
-        t += '<td title="Aggregate across all subtypes">Aggregate — all subtypes</td>';
-        WER_COLS.forEach(c => {
-          const v = aggRow[c];
-          const n = parseFloat(v);
-          const display = !isNaN(n) ? n.toFixed(1) : '—';
-          t += '<td' + werCellStyle(v) + '>' + display + '</td>';
-        });
-        t += '</tr>';
-        // Sub-rows (hidden by default)
-        subRows.forEach(sr => {
-          t += '<tr class="wer-sub-row ' + slaId + '">';
-          t += '<td></td>';
-          t += '<td title="' + (sr.ENTRY_TYPE || '') + '">' + (sr.ENTRY_TYPE || sr.Metric || '') + '</td>';
-          t += '<td></td>';
-          WER_COLS.forEach(c => {
+        t += '<div class="section-label" style="margin-top:36px">% Resolved Within TAT</div>';
+        t += '<div style="overflow-x:auto"><table class="wer-tbl"><thead><tr>';
+        t += '<th style="width:24px">#</th><th style="width:260px">Entry Type</th>';
+        WER_SLA_COLS.forEach(c => { t += '<th>' + c + '</th>'; });
+        t += '</tr></thead><tbody>';
+        slaData.forEach((sr, i) => {
+          const label = sr['Entry Type'] || sr.ENTRY_TYPE || sr.Metric || '';
+          const isAgg = label.toLowerCase().includes('resolved within tat');
+          t += '<tr' + (isAgg ? ' style="font-weight:600"' : '') + '>';
+          t += '<td>' + (i+1) + '</td>';
+          t += '<td title="' + label + '">' + label + '</td>';
+          WER_SLA_COLS.forEach(c => {
             const v = sr[c];
             const n = parseFloat(v);
             const display = !isNaN(n) ? n.toFixed(1) : '—';
@@ -988,9 +977,8 @@ function loadMetric(key, wfName, type) {
           });
           t += '</tr>';
         });
+        t += '</tbody></table></div>';
       }
-
-      t += '</tbody></table></div>';
 
       // ── Query 6: PUT Resolution (separate sub-view, different columns) ──
       if (putData && putData.length > 0) {
