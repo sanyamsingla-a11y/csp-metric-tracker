@@ -17,6 +17,10 @@ kap AS (
   FROM PROD_DB.PUBLIC.SERVICE_TICKET_MODEL
   WHERE LAST_TITLE ILIKE 'Internet Issues%'
     AND CURRENT_PARTNER_ACCOUNT_ID IN (SELECT PARTNER_ID FROM csp_partner)
+    -- Ticket must actually be ON the partner queue, not merely owned by a CSP partner.
+    -- ticket-service-java only calls SRS when IS_PARTNERASSIGNED (TicketCreationUtils.java:382),
+    -- so Wiom Net / Tech queue tickets can never produce a complaint and must not sit in the denominator.
+    AND IS_PARTNERASSIGNED = 1
     AND DATE(DATEADD(MINUTE,330, TICKET_ADDED_TIME::TIMESTAMP_NTZ)) >= DATEADD('day', -130, CURRENT_DATE())
 ),
 comp_ids AS (

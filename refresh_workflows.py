@@ -3344,6 +3344,10 @@ SELECT * FROM (
     FROM PROD_DB.PUBLIC.SERVICE_TICKET_MODEL
     WHERE LAST_TITLE ILIKE 'Internet Issues%'
       AND CURRENT_PARTNER_ACCOUNT_ID IN (SELECT PARTNER_ID FROM csp_partner)
+      -- Ticket must actually be ON the partner queue, not merely owned by a CSP partner.
+      -- ticket-service-java only calls SRS when IS_PARTNERASSIGNED (TicketCreationUtils.java:382),
+      -- so Wiom Net / Tech queue tickets can never produce a complaint and must not sit in the denominator.
+      AND IS_PARTNERASSIGNED = 1
       AND DATE(DATEADD(MINUTE, 330, TICKET_ADDED_TIME::TIMESTAMP_NTZ)) >= DATEADD('day', -30, CURRENT_DATE())
   ),
   comp_ids AS (
@@ -3464,6 +3468,10 @@ SELECT * FROM (
       AND c.TICKET_ID NOT LIKE 'prod-test%'
       AND REGEXP_LIKE(c.TICKET_ID, '^[0-9]+$')
       AND (stm.LAST_TITLE ILIKE 'Internet Issues|%' OR stm.LAST_TITLE ILIKE 'Internet Issues |%')
+      -- Consistency guard only: the cohort is already SRS-closed, so every row reached SRS and
+      -- is partner-assigned by construction (verified: 8,853/8,853 over 7d). Kept so all five
+      -- service-ticket cohorts state the same predicate.
+      AND stm.IS_PARTNERASSIGNED = 1
       AND DATE(DATEADD(MINUTE, 330, c.CLOSED_TIMESTAMP)) >= DATEADD('day', -30, CURRENT_DATE())
     QUALIFY ROW_NUMBER() OVER (PARTITION BY c.TICKET_ID ORDER BY c.CLOSED_TIMESTAMP DESC) = 1
   ),
@@ -3802,6 +3810,10 @@ kap_base AS (
   INNER JOIN csp_universe csp ON csp.PARTNER_ID::INT = COALESCE(stm.CURRENT_PARTNER_ACCOUNT_ID::INT, stm.LCO_ACCOUNT_ID::INT)
   WHERE stm.TICKET_ID IS NOT NULL AND REGEXP_LIKE(stm.TICKET_ID, '^[0-9]+$')
     AND (stm.LAST_TITLE ILIKE 'Internet Issues|%' OR stm.LAST_TITLE ILIKE 'Internet Issues |%')
+    -- Denominator must be tickets actually ON the partner queue. ticket-service-java only calls
+    -- SRS when IS_PARTNERASSIGNED (TicketCreationUtils.java:382), so Wiom Net / Tech queue tickets
+    -- can never produce a complaint or a TAS task and would depress the match rate by construction.
+    AND stm.IS_PARTNERASSIGNED = 1
     AND DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) >= DATEADD('day', -30, CURRENT_DATE())
   QUALIFY ROW_NUMBER() OVER (PARTITION BY stm.TICKET_ID ORDER BY stm.TICKET_ADDED_TIME DESC) = 1
 ),
@@ -3907,6 +3919,10 @@ srs_closed AS (
     AND c.TICKET_ID NOT LIKE 'prod-test%'
     AND REGEXP_LIKE(c.TICKET_ID, '^[0-9]+$')
     AND (stm.LAST_TITLE ILIKE 'Internet Issues|%' OR stm.LAST_TITLE ILIKE 'Internet Issues |%')
+    -- Consistency guard only: the cohort is already SRS-closed, so every row reached SRS and
+    -- is partner-assigned by construction (verified: 8,853/8,853 over 7d). Kept so all five
+    -- service-ticket cohorts state the same predicate.
+    AND stm.IS_PARTNERASSIGNED = 1
     AND DATE(DATEADD(MINUTE, 330, c.CLOSED_TIMESTAMP)) >= DATEADD('day', -30, CURRENT_DATE())
   QUALIFY ROW_NUMBER() OVER (PARTITION BY c.TICKET_ID ORDER BY c.CLOSED_TIMESTAMP DESC) = 1
 ),
@@ -4047,6 +4063,10 @@ kap_base AS (
   INNER JOIN csp_universe csp ON csp.PARTNER_ID::INT = COALESCE(stm.CURRENT_PARTNER_ACCOUNT_ID::INT, stm.LCO_ACCOUNT_ID::INT)
   WHERE stm.TICKET_ID IS NOT NULL AND REGEXP_LIKE(stm.TICKET_ID, '^[0-9]+$')
     AND (stm.LAST_TITLE ILIKE 'Internet Issues|%' OR stm.LAST_TITLE ILIKE 'Internet Issues |%')
+    -- Denominator must be tickets actually ON the partner queue. ticket-service-java only calls
+    -- SRS when IS_PARTNERASSIGNED (TicketCreationUtils.java:382), so Wiom Net / Tech queue tickets
+    -- can never produce a complaint or a TAS task and would depress the match rate by construction.
+    AND stm.IS_PARTNERASSIGNED = 1
     AND DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) >= DATEADD('day', -30, CURRENT_DATE())
   QUALIFY ROW_NUMBER() OVER (PARTITION BY stm.TICKET_ID ORDER BY stm.TICKET_ADDED_TIME DESC) = 1
 ),
@@ -4143,6 +4163,10 @@ kap_base AS (
   INNER JOIN csp_universe csp ON csp.PARTNER_ID::INT = COALESCE(stm.CURRENT_PARTNER_ACCOUNT_ID::INT, stm.LCO_ACCOUNT_ID::INT)
   WHERE stm.TICKET_ID IS NOT NULL AND REGEXP_LIKE(stm.TICKET_ID, '^[0-9]+$')
     AND (stm.LAST_TITLE ILIKE 'Internet Issues|%' OR stm.LAST_TITLE ILIKE 'Internet Issues |%')
+    -- Denominator must be tickets actually ON the partner queue. ticket-service-java only calls
+    -- SRS when IS_PARTNERASSIGNED (TicketCreationUtils.java:382), so Wiom Net / Tech queue tickets
+    -- can never produce a complaint or a TAS task and would depress the match rate by construction.
+    AND stm.IS_PARTNERASSIGNED = 1
     AND DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) >= DATEADD('day', -30, CURRENT_DATE())
   QUALIFY ROW_NUMBER() OVER (PARTITION BY stm.TICKET_ID ORDER BY stm.TICKET_ADDED_TIME DESC) = 1
 ),
