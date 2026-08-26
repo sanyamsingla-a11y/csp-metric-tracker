@@ -15,7 +15,8 @@ base as (
         last_title,
         current_partner_account_id partner_id,
         ticket_added_time added_time,
-        csp_id
+        csp_id,
+        is_partnerassigned
     from service_ticket_model stm
     inner join csp_partner csp on csp.partner_id::int = coalesce(stm.current_partner_account_id::int, stm.lco_account_id::int)
     where ticket_id is not null
@@ -33,7 +34,12 @@ filtered_tickets as (
         added_time
     from base
     where 1=1
-        and last_title ilike '%shifting%'
+        and last_title IN (
+            'Shifting Request|Shift to New Address',
+            'Shifting Request|Shift Within My Home',
+            'Shifting Request|Shift to New Address (Service Available)'
+        )
+        and is_partnerassigned = 1
 ),
 
 csp_complaints as (
