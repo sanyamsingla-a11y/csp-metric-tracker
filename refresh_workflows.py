@@ -4495,31 +4495,33 @@ q4_completed AS (
         n.updated_at AS completed_at,
         DATE(n.updated_at + INTERVAL '330 minutes') AS completed_dt
     FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.NBREC_EXECUTION_CANDIDATES n
-    WHERE n._fivetran_active AND n.state = 'COMPLETED' AND n.updated_at >= CURRENT_DATE - 60
+    WHERE n._fivetran_active AND n.state = 'COMPLETED'
+        AND n.reason_code = 'DEVICE_RECOVERED_VERIFIED'
+        AND n.updated_at >= CURRENT_DATE - 60
 ),
 q4_acs AS (
     SELECT cal.device_id, cal.created_at AS ts
     FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.CUSTODY_AUDIT_LOG cal
-    WHERE cal.to_state = 'IDLE' AND cal.created_at >= CURRENT_DATE - 61
+    WHERE cal.to_state IN ('IDLE', 'RETURNED') AND cal.created_at >= CURRENT_DATE - 61
 ),
 q4_clos AS (
-    SELECT ceh.connection_id, ceh.created_at AS ts
-    FROM PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTION_EVENT_HISTORY ceh
-    WHERE ceh.RESULTING_STATE = 'PENDING_DEACTIVATION' AND ceh.created_at >= CURRENT_DATE - 61
+    SELECT conn.CONNECTION_ID, conn.CURRENT_STATE
+    FROM PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS conn
+    WHERE conn.CURRENT_STATE IN ('PENDING_DEACTIVATION', 'DEACTIVATED')
 ),
 q4_daily AS (
-    SELECT c.completed_dt AS dt, COUNT(*) AS denom,
-        COUNT(CASE WHEN a.ts  IS NOT NULL AND ABS(DATEDIFF(day, c.completed_at, a.ts))  <= 1 THEN 1 END) AS acs_n,
-        COUNT(CASE WHEN cl.ts IS NOT NULL AND ABS(DATEDIFF(day, c.completed_at, cl.ts)) <= 1 THEN 1 END) AS clos_n
+    SELECT c.completed_dt AS dt, COUNT(DISTINCT c.EXECUTION_CANDIDATE_ID) AS denom,
+        COUNT(DISTINCT CASE WHEN a.ts IS NOT NULL AND ABS(DATEDIFF(day, c.completed_at, a.ts)) <= 1 THEN c.EXECUTION_CANDIDATE_ID END) AS acs_n,
+        COUNT(DISTINCT CASE WHEN cl.connection_id IS NOT NULL THEN c.EXECUTION_CANDIDATE_ID END) AS clos_n
     FROM q4_completed c
-    LEFT JOIN q4_acs  a  ON a.device_id      = c.device_id         AND ABS(DATEDIFF(day, c.completed_at, a.ts))  <= 1
-    LEFT JOIN q4_clos cl ON cl.connection_id = c.LAST_CONNECTION_ID AND ABS(DATEDIFF(day, c.completed_at, cl.ts)) <= 1
+    LEFT JOIN q4_acs  a  ON a.device_id      = c.device_id         AND ABS(DATEDIFF(day, c.completed_at, a.ts)) <= 1
+    LEFT JOIN q4_clos cl ON cl.connection_id = c.LAST_CONNECTION_ID
     GROUP BY 1
 ),
 q4_metrics AS (
-    SELECT dt, 'ACS IDLE Match %'      AS metric, ROUND(acs_n  * 100.0 / NULLIF(denom, 0), 1) AS val FROM q4_daily WHERE dt >= DATEADD('day',-30,CURRENT_DATE())
+    SELECT dt, 'ACS State Match %'     AS metric, ROUND(acs_n  * 100.0 / NULLIF(denom, 0), 1) AS val FROM q4_daily WHERE dt >= DATEADD('day',-30,CURRENT_DATE())
     UNION ALL
-    SELECT dt, 'CLOS PendDeact Match %',           ROUND(clos_n * 100.0 / NULLIF(denom, 0), 1)        FROM q4_daily WHERE dt >= DATEADD('day',-30,CURRENT_DATE())
+    SELECT dt, 'CLOS State Match %',               ROUND(clos_n * 100.0 / NULLIF(denom, 0), 1)        FROM q4_daily WHERE dt >= DATEADD('day',-30,CURRENT_DATE())
 ),
 pivot_4 AS (
     SELECT metric AS "Metric",
@@ -4688,10 +4690,32 @@ SELECT 'PUT Closure (Recharge Done) State Alignment',
     ROUND(AVG("Mean"),1), ROUND(AVG("Median"),1), ROUND(AVG("P90"),1)
 FROM pivot_2
 UNION ALL
-SELECT 'PUT Closure (Pickup Done) State Alignment',
-    ROUND(AVG("T-1"),1), ROUND(AVG("T-2"),1), ROUND(AVG("T-3"),1), ROUND(AVG("T-4"),1),
-    ROUND(AVG("T-5"),1), ROUND(AVG("T-6"),1), ROUND(AVG("T-7"),1), ROUND(AVG("T-8"),1),
-    ROUND(AVG("Mean"),1), ROUND(AVG("Median"),1), ROUND(AVG("P90"),1)
+SELECT 'PUT Closed → ACS State Alignment',
+    MAX(CASE WHEN "Metric"='ACS State Match %' THEN "T-1" END),
+    MAX(CASE WHEN "Metric"='ACS State Match %' THEN "T-2" END),
+    MAX(CASE WHEN "Metric"='ACS State Match %' THEN "T-3" END),
+    MAX(CASE WHEN "Metric"='ACS State Match %' THEN "T-4" END),
+    MAX(CASE WHEN "Metric"='ACS State Match %' THEN "T-5" END),
+    MAX(CASE WHEN "Metric"='ACS State Match %' THEN "T-6" END),
+    MAX(CASE WHEN "Metric"='ACS State Match %' THEN "T-7" END),
+    MAX(CASE WHEN "Metric"='ACS State Match %' THEN "T-8" END),
+    MAX(CASE WHEN "Metric"='ACS State Match %' THEN "Mean" END),
+    MAX(CASE WHEN "Metric"='ACS State Match %' THEN "Median" END),
+    MAX(CASE WHEN "Metric"='ACS State Match %' THEN "P90" END)
+FROM pivot_4
+UNION ALL
+SELECT 'PUT Closed → CLOS State Alignment',
+    MAX(CASE WHEN "Metric"='CLOS State Match %' THEN "T-1" END),
+    MAX(CASE WHEN "Metric"='CLOS State Match %' THEN "T-2" END),
+    MAX(CASE WHEN "Metric"='CLOS State Match %' THEN "T-3" END),
+    MAX(CASE WHEN "Metric"='CLOS State Match %' THEN "T-4" END),
+    MAX(CASE WHEN "Metric"='CLOS State Match %' THEN "T-5" END),
+    MAX(CASE WHEN "Metric"='CLOS State Match %' THEN "T-6" END),
+    MAX(CASE WHEN "Metric"='CLOS State Match %' THEN "T-7" END),
+    MAX(CASE WHEN "Metric"='CLOS State Match %' THEN "T-8" END),
+    MAX(CASE WHEN "Metric"='CLOS State Match %' THEN "Mean" END),
+    MAX(CASE WHEN "Metric"='CLOS State Match %' THEN "Median" END),
+    MAX(CASE WHEN "Metric"='CLOS State Match %' THEN "P90" END)
 FROM pivot_4
 UNION ALL
 SELECT 'Pickup Done vs Payout Made',
@@ -5008,31 +5032,33 @@ WITH completed AS (
     SELECT n.EXECUTION_CANDIDATE_ID, n.DEVICE_ID, n.LAST_CONNECTION_ID,
         n.updated_at AS completed_at, DATE(n.updated_at + INTERVAL '330 minutes') AS dt
     FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.NBREC_EXECUTION_CANDIDATES n
-    WHERE n._FIVETRAN_ACTIVE AND n.state = 'COMPLETED' AND n.updated_at >= CURRENT_DATE - 60
+    WHERE n._FIVETRAN_ACTIVE AND n.state = 'COMPLETED'
+        AND n.reason_code = 'DEVICE_RECOVERED_VERIFIED'
+        AND n.updated_at >= CURRENT_DATE - 60
 ),
 acs_transition AS (
     SELECT cal.device_id, cal.created_at AS acs_transition_at
     FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.CUSTODY_AUDIT_LOG cal
-    WHERE cal.to_state = 'IDLE' AND cal.created_at >= CURRENT_DATE - 61
+    WHERE cal.to_state IN ('IDLE', 'RETURNED') AND cal.created_at >= CURRENT_DATE - 61
 ),
-clos_transition AS (
-    SELECT ceh.connection_id, ceh.created_at AS clos_transition_at
-    FROM PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTION_EVENT_HISTORY ceh
-    WHERE ceh.RESULTING_STATE = 'PENDING_DEACTIVATION' AND ceh.created_at >= CURRENT_DATE - 61
+clos_current AS (
+    SELECT conn.CONNECTION_ID, conn.CURRENT_STATE
+    FROM PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS conn
+    WHERE conn.CURRENT_STATE IN ('PENDING_DEACTIVATION', 'DEACTIVATED')
 ),
 daily_metrics AS (
-    SELECT c.dt, COUNT(*) AS nbrec_completed,
-        COUNT(CASE WHEN at2.acs_transition_at IS NOT NULL AND ABS(DATEDIFF(day, c.completed_at, at2.acs_transition_at)) <= 1 THEN 1 END) AS acs_idle_within_1d,
-        COUNT(CASE WHEN ct.clos_transition_at IS NOT NULL AND ABS(DATEDIFF(day, c.completed_at, ct.clos_transition_at)) <= 1 THEN 1 END) AS clos_deact_within_1d
+    SELECT c.dt, COUNT(DISTINCT c.EXECUTION_CANDIDATE_ID) AS nbrec_completed,
+        COUNT(DISTINCT CASE WHEN at2.acs_transition_at IS NOT NULL AND ABS(DATEDIFF(day, c.completed_at, at2.acs_transition_at)) <= 1 THEN c.EXECUTION_CANDIDATE_ID END) AS acs_terminal,
+        COUNT(DISTINCT CASE WHEN cl.connection_id IS NOT NULL THEN c.EXECUTION_CANDIDATE_ID END) AS clos_terminal
     FROM completed c
     LEFT JOIN acs_transition at2 ON at2.device_id = c.device_id AND ABS(DATEDIFF(day, c.completed_at, at2.acs_transition_at)) <= 1
-    LEFT JOIN clos_transition ct ON ct.connection_id = c.LAST_CONNECTION_ID AND ABS(DATEDIFF(day, c.completed_at, ct.clos_transition_at)) <= 1
+    LEFT JOIN clos_current cl ON cl.connection_id = c.LAST_CONNECTION_ID
     GROUP BY 1
 ),
 metrics AS (
     SELECT dt, 'NBREC Completed' AS metric, nbrec_completed AS val FROM daily_metrics
-    UNION ALL SELECT dt, 'ACS IDLE (Within 1D)', acs_idle_within_1d FROM daily_metrics
-    UNION ALL SELECT dt, 'CLOS Pending Deactivation (Within 1D)', clos_deact_within_1d FROM daily_metrics
+    UNION ALL SELECT dt, 'ACS Terminal (IDLE/RETURNED)', acs_terminal FROM daily_metrics
+    UNION ALL SELECT dt, 'CLOS State (PendDeact/Deactivated)', clos_terminal FROM daily_metrics
 )
 SELECT metric AS "Metric",
     MAX(CASE WHEN dt = DATEADD(day,-1,CURRENT_DATE()) THEN val END) AS "T-1",
