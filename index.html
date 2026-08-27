@@ -837,13 +837,16 @@ function loadMetric(key, wfName, type) {
     if (!hasData) {
       html = '<div class="no-data"><p>No WHR data loaded yet.<br>Run <code>python refresh_workflows.py --only=whr_b2i_task_creation,whr_notif_sent,...</code></p></div>';
     } else {
-      function cellStyle(v) {
+      function cellStyle(v, redThreshold) {
         const n = parseFloat(v);
+        const rt = redThreshold || 95;
         if (isNaN(n)) return '';
-        if (n < 95) return ' style="background:rgba(239,68,68,0.15);color:#ef4444;font-weight:600"';
+        if (n < rt) return ' style="background:rgba(239,68,68,0.15);color:#ef4444;font-weight:600"';
         if (n < 99) return ' style="background:rgba(245,158,11,0.12);color:#f59e0b;font-weight:600"';
         return '';
       }
+      // KPI keys with 90% red threshold (PN sent/receive rates)
+      const LOW_THRESHOLD_KEYS = ['whr_notif_sent','whr_notif_receive','whr_isp_pn_sent','whr_isp_pn_delivered'];
 
       let t = '<style>.whr-tbl{border-collapse:collapse;width:100%;font-size:12px;table-layout:fixed}'
         + '.whr-tbl th,.whr-tbl td{padding:5px 6px;border-bottom:1px solid var(--border,#e5e7eb);text-align:right}'
@@ -867,12 +870,13 @@ function loadMetric(key, wfName, type) {
         t += '<tr><td>' + (i+1) + '</td>';
         t += '<td title="' + r.cfg.name + '">' + r.cfg.name + '</td>';
         t += '<td title="' + r.cfg.desc + '">' + r.cfg.desc + '</td>';
+        const rt = LOW_THRESHOLD_KEYS.includes(r.cfg.key) ? 90 : 95;
         WHR_COLS.forEach(c => {
           const v = r.data ? r.data[c] : null;
           const n = parseFloat(v);
           const capped = !isNaN(n) ? Math.min(n, 100) : NaN;
           const display = !isNaN(capped) ? capped.toFixed(1) : '—';
-          t += '<td' + cellStyle(capped) + '>' + display + '</td>';
+          t += '<td' + cellStyle(capped, rt) + '>' + display + '</td>';
         });
         t += '</tr>';
       });
