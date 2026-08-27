@@ -837,12 +837,13 @@ function loadMetric(key, wfName, type) {
     if (!hasData) {
       html = '<div class="no-data"><p>No WHR data loaded yet.<br>Run <code>python refresh_workflows.py --only=whr_b2i_task_creation,whr_notif_sent,...</code></p></div>';
     } else {
-      function cellStyle(v, redThreshold) {
+      function cellStyle(v, redThreshold, warnThreshold) {
         const n = parseFloat(v);
         const rt = redThreshold || 95;
+        const wt = warnThreshold || 99;
         if (isNaN(n)) return '';
         if (n < rt) return ' style="background:rgba(239,68,68,0.15);color:#ef4444;font-weight:600"';
-        if (n < 99) return ' style="background:rgba(245,158,11,0.12);color:#f59e0b;font-weight:600"';
+        if (n < wt) return ' style="background:rgba(245,158,11,0.12);color:#f59e0b;font-weight:600"';
         return '';
       }
       // KPI keys with 90% red threshold (PN sent/receive rates)
@@ -870,13 +871,15 @@ function loadMetric(key, wfName, type) {
         t += '<tr><td>' + (i+1) + '</td>';
         t += '<td title="' + r.cfg.name + '">' + r.cfg.name + '</td>';
         t += '<td title="' + r.cfg.desc + '">' + r.cfg.desc + '</td>';
-        const rt = LOW_THRESHOLD_KEYS.includes(r.cfg.key) ? 90 : 95;
+        const isPnRow = LOW_THRESHOLD_KEYS.includes(r.cfg.key);
+        const rt = isPnRow ? 90 : 95;
+        const wt = isPnRow ? 90 : 99;
         WHR_COLS.forEach(c => {
           const v = r.data ? r.data[c] : null;
           const n = parseFloat(v);
           const capped = !isNaN(n) ? Math.min(n, 100) : NaN;
           const display = !isNaN(capped) ? capped.toFixed(1) : '—';
-          t += '<td' + cellStyle(capped, rt) + '>' + display + '</td>';
+          t += '<td' + cellStyle(capped, rt, wt) + '>' + display + '</td>';
         });
         t += '</tr>';
       });
