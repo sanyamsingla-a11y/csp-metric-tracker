@@ -14,11 +14,18 @@ csp_account as (select csp_id, partner_id from csp_gateway_service_csp_gateway_s
   where _fivetran_active and csp_id not in ('a0a6w1','a0a0b1') and partner_id is not null),
 
 -- 1. TAX_WITHHELD: due=settlement batch; ok=INV-05 amount & posted within cycle (wallet_date <= batch_date)
+tds_overflow as (select csp_id, date(convert_timezone('Asia/Kolkata',created_at)) ovf_date, sum(amount) ovf_paise
+  from csp_payment_settlement_service_csp_payment_settlement_service.liability_ledger_entries
+  where _fivetran_active and entry_type='TDS_OVERFLOW' group by csp_id, date(convert_timezone('Asia/Kolkata',created_at))),
+-- FIXED: TDS is correct when withheld + TDS_OVERFLOW liability = the batch total. The old
+-- equality failed every partial overflow, and every total overflow after 19-Aug-2026.
 tax_events as (select b.batch_date::date due_date,
-    iff(w.id is not null and abs(w.amount)=b.aggregate_tds_paise and date(convert_timezone('Asia/Kolkata',w.created_at))<=b.batch_date::date,1,0) is_ok
+    iff(coalesce(abs(w.amount),0)+coalesce(o.ovf_paise,0)=b.aggregate_tds_paise
+        and (w.id is null or date(convert_timezone('Asia/Kolkata',w.created_at))<=b.batch_date::date),1,0) is_ok
   from csp_payment_settlement_service_csp_payment_settlement_service.settlement_day_batch_entry b
   join csp_account c on c.csp_id=b.csp_id
   left join csp_payment_settlement_service_csp_payment_settlement_service.wallet_ledger_entries w on w.id=b.wallet_ledger_entry_ref and w._fivetran_active and w.entry_type='TAX_WITHHELD'
+  left join tds_overflow o on o.csp_id=b.csp_id and o.ovf_date=b.batch_date::date
   where b._fivetran_active and b.aggregate_tds_paise>0),
 
 -- 2. INTERVENTION_CREDIT: comp entitlement -> wallet on correlation_id, amount, same day
@@ -51,7 +58,10 @@ r_due as (select c2.device_id, c2.conn, date(convert_timezone('UTC','Asia/Kolkat
 r_paid as (select distinct w.remarks:device_id::string device_id, w.remarks:connection_id::string conn
   from csp_payment_settlement_service_csp_payment_settlement_service.wallet_ledger_entries w join csp_account a on a.csp_id=w.csp_id
   where w._fivetran_active and w.entry_type='RECOVERY_RETURN'),
-rec_events as (select d.due_date, iff(p.device_id is not null,1,0) is_ok from r_due d left join r_paid p on p.device_id=d.device_id and p.conn=d.conn),
+-- FIXED: null-safe connection_id -- NULL=NULL is never true, so a strict join silently
+-- scored genuinely-paid recoveries as never paid.
+rec_events as (select d.due_date, iff(p.device_id is not null,1,0) is_ok from r_due d
+  left join r_paid p on p.device_id=d.device_id and equal_null(p.conn, d.conn)),
 
 -- 5. NETBOX_SECURITY_DEDUCTION: wallet <-> deposit SECURITY_FROM_WALLET (correlation_id, amount, same day)
 nb_events as (select date(convert_timezone('Asia/Kolkata',w.created_at)) due_date,
@@ -68,9 +78,16 @@ liab_events as (select date(convert_timezone('Asia/Kolkata',w.created_at)) due_d
   where w._fivetran_active and w.entry_type='LIABILITY_AUTO_ADJUST' group by w.id, date(convert_timezone('Asia/Kolkata',w.created_at))),
 
 -- 7. BASE_PAYOUT: OK = disbursed wallet rows on WALLET DATE; MISS = walk stage 4 & 5 (gate/comp but not disbursed) on obligation date
-bp_ok as (select date(convert_timezone('Asia/Kolkata',w.created_at)) due_date, iff(abs(w.amount)=30000,1,0) is_ok
+-- FIXED: base payout is correct when it equals the entitled amount, not a hardcoded
+-- Rs 300. Rs 750 (live 18-Aug-2026) and Rs 850 (25-Aug-2026) are legitimate tiers.
+bp_ok as (select due_date, is_ok from (
+  select w.id, date(convert_timezone('Asia/Kolkata',w.created_at)) due_date,
+         max(iff(e.correlation_id is not null and abs(w.amount)=abs(e.amount),1,0)) is_ok
   from csp_payment_settlement_service_csp_payment_settlement_service.wallet_ledger_entries w join csp_account c on c.csp_id=w.csp_id
-  where w._fivetran_active and w.entry_type='BASE_PAYOUT'),
+  left join csp_compensation_service_csp_compensation_service.entitlement_ledger_entries e
+    on e.correlation_id=w.correlation_id and e._fivetran_active and e.entry_type='BASE_PAYOUT_CREDIT'
+  where w._fivetran_active and w.entry_type='BASE_PAYOUT'
+  group by w.id, date(convert_timezone('Asia/Kolkata',w.created_at)))),
 bp_gaterefs as (select distinct recharge_reference_id r from csp_rv_service_csp_rv_service.recharge_gates where _fivetran_active),
 bp_comprefs as (select distinct recharge_event_ref r from csp_compensation_service_csp_compensation_service.entitlement_ledger_entries
   where _fivetran_active and entry_type='BASE_PAYOUT_CREDIT' and credit_type='CONNECTION_ENTITLEMENT'),

@@ -13,13 +13,27 @@ periods as (
     union all select 'M-3',dateadd('month',-3,current_month_start),dateadd('day',-1,dateadd('month',-2,current_month_start)) from anchors),
 csp_account as (select csp_id, partner_id from csp_gateway_service_csp_gateway_service.csp_account
     where _fivetran_active and csp_id not in ('a0a6w1','a0a0b1') and partner_id is not null),
+tds_overflow as (
+    -- When the wallet cannot cover the TDS due, the settlement service withholds what it can
+    -- and books the remainder as a TDS_OVERFLOW liability (drawn down later by
+    -- LIABILITY_AUTO_ADJUST). Since 19-Aug-2026 a TOTAL overflow writes no wallet row at all
+    -- and leaves wallet_ledger_entry_ref NULL. Verified 1 row per csp per day.
+    select csp_id, date(convert_timezone('Asia/Kolkata',created_at)) ovf_date, sum(amount) ovf_paise
+    from csp_payment_settlement_service_csp_payment_settlement_service.liability_ledger_entries
+    where _fivetran_active and entry_type='TDS_OVERFLOW'
+    group by csp_id, date(convert_timezone('Asia/Kolkata',created_at))),
 tax_events as (
     select 'TAX_WITHHELD' event_type, b.batch_date::date due_date,
-           iff(w.id is not null and date(convert_timezone('Asia/Kolkata',w.created_at))<=b.batch_date::date,1,0) is_timely
+           -- FIXED: timely when the wallet entry posted within the cycle, OR when the whole
+           -- TDS was booked as a TDS_OVERFLOW liability on the batch date (no wallet row
+           -- is written at all in that case, so 'w.id is not null' wrongly failed it).
+           iff((w.id is not null and date(convert_timezone('Asia/Kolkata',w.created_at))<=b.batch_date::date)
+               or (w.id is null and o.ovf_paise=b.aggregate_tds_paise),1,0) is_timely
     from csp_payment_settlement_service_csp_payment_settlement_service.settlement_day_batch_entry b
     join csp_account c on c.csp_id=b.csp_id
     left join csp_payment_settlement_service_csp_payment_settlement_service.wallet_ledger_entries w
       on w.id=b.wallet_ledger_entry_ref and w._fivetran_active and w.entry_type='TAX_WITHHELD'
+    left join tds_overflow o on o.csp_id=b.csp_id and o.ovf_date=b.batch_date::date
     where b._fivetran_active and b.aggregate_tds_paise>0),
 led as (
     select w.reference_id withdrawal_id, w.csp_id, w.payout_id orig_payout,

@@ -20,13 +20,27 @@ csp_account as (
     where _fivetran_active and csp_id not in ('a0a6w1','a0a0b1') and partner_id is not null),
 
 -- tax: wallet entry exists and date <= batch_date
+tds_overflow as (
+    -- When the wallet cannot cover the TDS due, the settlement service withholds what it can
+    -- and books the remainder as a TDS_OVERFLOW liability (drawn down later by
+    -- LIABILITY_AUTO_ADJUST). Since 19-Aug-2026 a TOTAL overflow writes no wallet row at all
+    -- and leaves wallet_ledger_entry_ref NULL. Verified 1 row per csp per day.
+    select csp_id, date(convert_timezone('Asia/Kolkata',created_at)) ovf_date, sum(amount) ovf_paise
+    from csp_payment_settlement_service_csp_payment_settlement_service.liability_ledger_entries
+    where _fivetran_active and entry_type='TDS_OVERFLOW'
+    group by csp_id, date(convert_timezone('Asia/Kolkata',created_at))),
 tax_events as (
     select b.batch_date::date due_date,
-           iff(w.id is not null and date(convert_timezone('Asia/Kolkata',w.created_at))<=b.batch_date::date,1,0) is_timely
+           -- FIXED: timely when the wallet entry posted within the cycle, OR when the whole
+           -- TDS was booked as a TDS_OVERFLOW liability on the batch date (no wallet row
+           -- is written at all in that case, so 'w.id is not null' wrongly failed it).
+           iff((w.id is not null and date(convert_timezone('Asia/Kolkata',w.created_at))<=b.batch_date::date)
+               or (w.id is null and o.ovf_paise=b.aggregate_tds_paise),1,0) is_timely
     from csp_payment_settlement_service_csp_payment_settlement_service.settlement_day_batch_entry b
     join csp_account c on c.csp_id=b.csp_id
     left join csp_payment_settlement_service_csp_payment_settlement_service.wallet_ledger_entries w
       on w.id=b.wallet_ledger_entry_ref and w._fivetran_active and w.entry_type='TAX_WITHHELD'
+    left join tds_overflow o on o.csp_id=b.csp_id and o.ovf_date=b.batch_date::date
     where b._fivetran_active and b.aggregate_tds_paise>0),
 
 -- withdrawal: RazorpayX disposition OK_PAID or OK_REVERSED, settled within 24h of debit; exclude INFLIGHT_NEFT
@@ -61,7 +75,9 @@ wd_disp as (
                   and w.reversal_cnt=0 and r.retry_status='processing'    then 'INFLIGHT_NEFT'
              when w.wallet_net_rs=0 and w.reversal_cnt>=1                 then 'OK_REVERSED_not_paid'
              when w.wallet_net_rs>=0 and coalesce(r.retry_utr,xo.utr) is not null then 'ANOMALY_LEAK'
-             else 'REVIEW' end disp
+             else 'REVIEW' end disp,
+           -- operative RazorpayX status: the retry's if there was one, else the original.
+           coalesce(xr.status, xo.status) eff_status
     from led l
     join wd_wallet w on w.withdrawal_id=l.withdrawal_id
     left join wd_retry r on r.withdrawal_id=l.withdrawal_id
@@ -71,7 +87,14 @@ withdrawal_events as (
     select debit_date due_date,
            iff(disp in ('OK_PAID','OK_REVERSED_not_paid') and settled_ts is not null
                and datediff('hour',debit_ts,settled_ts) between 0 and 24,1,0) is_timely
-    from wd_disp where disp<>'INFLIGHT_NEFT'),
+    from wd_disp
+    where disp<>'INFLIGHT_NEFT'
+      -- FIXED (matches earnings_q1): withhold judgment only on payouts still in flight at the
+      -- gateway ('processing'/'queued'). Rows already OK_PAID/OK_REVERSED stay scored, and a
+      -- payout with NO RazorpayX record at all is scored BAD -- the wallet is debited with no
+      -- transfer to match it, which is a defect, not an unresolved state.
+      and (disp in ('OK_PAID','OK_REVERSED_not_paid')
+           or coalesce(eff_status,'NO_GATEWAY_RECORD') not in ('processing','queued'))),
 
 -- netbox: deposit_ledger same-day match exists
 netbox_events as (

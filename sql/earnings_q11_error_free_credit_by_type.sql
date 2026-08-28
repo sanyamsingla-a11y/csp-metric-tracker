@@ -36,7 +36,10 @@ recovery_due as (
           from (select try_parse_json(payload) p from csp_asset_custody_service_csp_asset_custody_service.outbox_record
                 where record_type ilike '%DeviceRecoveryConfirmed%' and coalesce(_fivetran_deleted,false)=false)) x
     join csp_account c on c.csp_id=x.csp_id
-    left join recovery_entered e on e.device_id=x.device_id and e.connection_id=x.connection_id
+-- FIXED: null-safe connection_id -- NULL=NULL is never true, so a strict join silently
+-- scored genuinely-paid recoveries as never paid.
+    left join recovery_entered e
+      on e.device_id=x.device_id and equal_null(e.connection_id, x.connection_id)
     where x.recovery_method in ('CSP_PICKUP','CUSTOMER_RETURN')
       and (e.entered_at is null or x.confirmed_at<=dateadd('day',30,e.entered_at))),
 recovery_wallet as (
@@ -49,12 +52,22 @@ recovery_wallet as (
 recovery_events as (
     select 'RECOVERY_RETURN' event_type, d.due_date, iff(w.correct_amount=1,1,0) is_correct
     from recovery_due d
-    left join recovery_wallet w on w.csp_id=d.csp_id and w.device_id=d.device_id and w.connection_id=d.connection_id),
+    left join recovery_wallet w
+      on w.csp_id=d.csp_id and w.device_id=d.device_id
+     and equal_null(w.connection_id, d.connection_id)),
+-- FIXED: base payout is correct when it equals the entitled amount, not a hardcoded
+-- Rs 300. Rs 750 (live 18-Aug-2026) and Rs 850 (25-Aug-2026) are legitimate tiers.
 base_payout_events as (
-    select 'BASE_PAYOUT' event_type, date(convert_timezone('Asia/Kolkata',w.created_at)) due_date, iff(abs(w.amount)=30000,1,0) is_correct
+    select 'BASE_PAYOUT' event_type, due_date, is_correct from (
+    select w.id, date(convert_timezone('Asia/Kolkata',w.created_at)) due_date,
+           max(iff(e.correlation_id is not null and abs(w.amount)=abs(e.amount),1,0)) is_correct
     from csp_payment_settlement_service_csp_payment_settlement_service.wallet_ledger_entries w
     join csp_account c on c.csp_id=w.csp_id
-    where w._fivetran_active and w.entry_type='BASE_PAYOUT'),
+    left join csp_compensation_service_csp_compensation_service.entitlement_ledger_entries e
+      on e.correlation_id=w.correlation_id and e._fivetran_active
+     and e.entry_type='BASE_PAYOUT_CREDIT'
+    where w._fivetran_active and w.entry_type='BASE_PAYOUT'
+    group by w.id, date(convert_timezone('Asia/Kolkata',w.created_at)))),
 bonus_wallet as (
     select w.id, w.csp_id, c.partner_id, w.amount, w.line_item_description,
            date(convert_timezone('Asia/Kolkata',w.created_at)) due_date

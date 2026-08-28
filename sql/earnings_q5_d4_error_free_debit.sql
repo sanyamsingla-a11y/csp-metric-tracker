@@ -15,13 +15,24 @@ periods as (
 csp_account as (
     select csp_id, partner_id from csp_gateway_service_csp_gateway_service.csp_account
     where _fivetran_active and csp_id not in ('a0a6w1','a0a0b1') and partner_id is not null),
+tds_overflow as (
+    -- When the wallet cannot cover the TDS due, the settlement service withholds what it can
+    -- and books the remainder as a TDS_OVERFLOW liability (drawn down later by
+    -- LIABILITY_AUTO_ADJUST). Since 19-Aug-2026 a TOTAL overflow writes no wallet row at all
+    -- and leaves wallet_ledger_entry_ref NULL. Verified 1 row per csp per day.
+    select csp_id, date(convert_timezone('Asia/Kolkata',created_at)) ovf_date, sum(amount) ovf_paise
+    from csp_payment_settlement_service_csp_payment_settlement_service.liability_ledger_entries
+    where _fivetran_active and entry_type='TDS_OVERFLOW'
+    group by csp_id, date(convert_timezone('Asia/Kolkata',created_at))),
 tax_events as (
     select b.batch_date::date due_date,
-           iff(w.id is not null and abs(w.amount)=b.aggregate_tds_paise,1,0) is_correct
+           -- FIXED: correct when withheld + overflow = the batch total.
+           iff(coalesce(abs(w.amount),0)+coalesce(o.ovf_paise,0)=b.aggregate_tds_paise,1,0) is_correct
     from csp_payment_settlement_service_csp_payment_settlement_service.settlement_day_batch_entry b
     join csp_account c on c.csp_id=b.csp_id
     left join csp_payment_settlement_service_csp_payment_settlement_service.wallet_ledger_entries w
       on w.id=b.wallet_ledger_entry_ref and w._fivetran_active and w.entry_type='TAX_WITHHELD'
+    left join tds_overflow o on o.csp_id=b.csp_id and o.ovf_date=b.batch_date::date
     where b._fivetran_active and b.aggregate_tds_paise>0),
 /* ---- WITHDRAWAL (RazorpayX-correlated) ---- */
 -- FIX 3: join csp_account to exclude test accounts from withdrawal denominator

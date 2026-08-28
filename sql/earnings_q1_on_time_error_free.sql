@@ -43,7 +43,10 @@ recovery_due as (
                 from csp_asset_custody_service_csp_asset_custody_service.outbox_record
                 where record_type ilike '%DeviceRecoveryConfirmed%' and coalesce(_fivetran_deleted,false)=false)) x
     join csp_account c on c.csp_id=x.csp_id
-    left join recovery_entered e on e.device_id=x.device_id and e.connection_id=x.connection_id
+    -- FIXED: connection_id is NULL on both sides for some recoveries, and NULL=NULL is
+    -- never true, so a strict join silently drops them. device_id stays strict.
+    left join recovery_entered e
+      on e.device_id=x.device_id and equal_null(e.connection_id, x.connection_id)
     where x.recovery_method in ('CSP_PICKUP','CUSTOMER_RETURN')
       and (e.entered_at is null or x.confirmed_at<=dateadd('day',30,e.entered_at))),
 recovery_wallet as (
@@ -58,12 +61,28 @@ recovery_events as (
            iff(w.first_wallet_ts is not null and w.first_wallet_ts>=d.due_ts
                and w.first_wallet_ts<=dateadd('hour',24,d.due_ts) and w.correct_amount=1,1,0) is_good
     from recovery_due d
-    left join recovery_wallet w on w.csp_id=d.csp_id and w.device_id=d.device_id and w.connection_id=d.connection_id),
+    -- FIXED: null-safe connection_id (see recovery_due). Two 27-Aug-2026 recoveries were
+    -- paid Rs 50 within ~1 second of the due timestamp but scored as never paid.
+    left join recovery_wallet w
+      on w.csp_id=d.csp_id and w.device_id=d.device_id
+     and equal_null(w.connection_id, d.connection_id)),
 base_payout_events as (
-    select date(convert_timezone('Asia/Kolkata',w.created_at)) due_date, iff(abs(w.amount)=30000,1,0) is_good
+    -- A base payout is correct when it equals the amount the compensation service
+    -- actually entitled -- NOT a hardcoded Rs 300. The Rs 750 tier (live 18-Aug-2026,
+    -- 61 CSPs) and Rs 850 tier (25-Aug-2026) are legitimate payouts and every one of
+    -- them carries a BASE_PAYOUT_CREDIT entitlement row with an exactly equal amount.
+    -- The old `abs(w.amount)=30000` literal flagged all of them as errors, decaying
+    -- this metric a little more each day as the new tiers ramped.
+    -- Grouped by w.id so a duplicate entitlement row cannot fan out the wallet row.
+    select w.id, date(convert_timezone('Asia/Kolkata',w.created_at)) due_date,
+           max(iff(e.correlation_id is not null and abs(w.amount)=abs(e.amount),1,0)) is_good
     from csp_payment_settlement_service_csp_payment_settlement_service.wallet_ledger_entries w
     join csp_account c on c.csp_id=w.csp_id
-    where w._fivetran_active and w.entry_type='BASE_PAYOUT'),
+    left join csp_compensation_service_csp_compensation_service.entitlement_ledger_entries e
+      on e.correlation_id=w.correlation_id and e._fivetran_active
+     and e.entry_type='BASE_PAYOUT_CREDIT'
+    where w._fivetran_active and w.entry_type='BASE_PAYOUT'
+    group by w.id, date(convert_timezone('Asia/Kolkata',w.created_at))),
 bonus_wallet as (
     select w.id, w.csp_id, c.partner_id, w.amount, w.line_item_description,
            date(convert_timezone('Asia/Kolkata',w.created_at)) wallet_date
@@ -92,14 +111,32 @@ bonus_events as (
     left join bonus_dynamo_single ds on ds.account_id=w.partner_id and ds.amount_rs=round(w.amount/100,2)
     left join bonus_dynamo_clubbed dc on dc.account_id=w.partner_id and dc.amount_rs=round(w.amount/100,2)
     group by w.id, w.wallet_date),
+tds_overflow as (
+    -- When the wallet cannot cover the TDS due, the settlement service withholds what it
+    -- can and books the remainder as a TDS_OVERFLOW liability (drawn down later by
+    -- LIABILITY_AUTO_ADJUST). Verified 1 row per csp per day, and the batch is 1 row per
+    -- csp per batch_date, so csp_id + date is a safe key.
+    select csp_id, date(convert_timezone('Asia/Kolkata',created_at)) ovf_date,
+           sum(amount) ovf_paise
+    from csp_payment_settlement_service_csp_payment_settlement_service.liability_ledger_entries
+    where _fivetran_active and entry_type='TDS_OVERFLOW'
+    group by csp_id, date(convert_timezone('Asia/Kolkata',created_at))),
 tax_events as (
+    -- FIXED: TDS is correct when withheld + overflow equals the batch total. The old rule
+    -- (abs(w.amount) = aggregate_tds_paise) failed every partial overflow, and after
+    -- 19-Aug-2026 every total overflow too (those write no wallet row at all and leave
+    -- wallet_ledger_entry_ref NULL) -- an equality the service deliberately never guarantees.
+    -- Timeliness is only assertable when a wallet entry exists.
     select b.batch_date::date due_date,
-           iff(w.id is not null and date(convert_timezone('Asia/Kolkata',w.created_at))<=b.batch_date::date
-               and abs(w.amount)=b.aggregate_tds_paise,1,0) is_good
+           iff(coalesce(abs(w.amount),0) + coalesce(o.ovf_paise,0) = b.aggregate_tds_paise
+               and (w.id is null
+                    or date(convert_timezone('Asia/Kolkata',w.created_at))<=b.batch_date::date),1,0) is_good
     from csp_payment_settlement_service_csp_payment_settlement_service.settlement_day_batch_entry b
     join csp_account c on c.csp_id=b.csp_id
     left join csp_payment_settlement_service_csp_payment_settlement_service.wallet_ledger_entries w
       on w.id=b.wallet_ledger_entry_ref and w._fivetran_active and w.entry_type='TAX_WITHHELD'
+    left join tds_overflow o
+      on o.csp_id=b.csp_id and o.ovf_date=b.batch_date::date
     where b._fivetran_active and b.aggregate_tds_paise>0),
 led as (
     select reference_id withdrawal_id, csp_id, payout_id orig_payout, created_at debit_ts,
@@ -132,17 +169,38 @@ wd_disp as (
                   and w.reversal_cnt=0 and r.retry_status='processing'    then 'INFLIGHT_NEFT'
              when w.wallet_net_rs=0 and w.reversal_cnt>=1                 then 'OK_REVERSED_not_paid'
              when w.wallet_net_rs>=0 and coalesce(r.retry_utr,xo.utr) is not null then 'ANOMALY_LEAK'
-             else 'REVIEW' end disp
+             else 'REVIEW' end disp,
+           -- operative RazorpayX status: the retry's if there was one, else the original.
+           coalesce(xr.status, xo.status) eff_status
     from led l
     join wd_wallet w on w.withdrawal_id=l.withdrawal_id
     left join wd_retry r on r.withdrawal_id=l.withdrawal_id
     left join wd_rzp xo on xo.source_id=l.orig_payout
     left join wd_rzp xr on xr.source_id=r.retry_payout_id),
 withdrawal_events as (
+    -- FIXED: a payout that has not reached a terminal RazorpayX status has not resolved
+    -- yet, so it is excluded from the denominator rather than scored as a failure. The old
+    -- rule failed every payout sitting at 'processing' (a UTR is often already assigned),
+    -- which is a snapshot-maturity artefact, not a settlement failure.
+    -- Terminal = processed / failed / reversed. Non-terminal = processing / queued / no
+    -- RazorpayX record yet.
     select debit_date due_date,
            iff(disp in ('OK_PAID','OK_REVERSED_not_paid') and settled_ts is not null
                and datediff('hour',debit_ts,settled_ts) between 0 and 24,1,0) is_good
-    from wd_disp where disp<>'INFLIGHT_NEFT'),
+    from wd_disp
+    where disp<>'INFLIGHT_NEFT'
+      -- Withhold judgment ONLY on payouts genuinely still in flight at the gateway
+      -- (RazorpayX status 'processing' or 'queued'). Everything else is scored:
+      --   * already OK_PAID / OK_REVERSED  -> stays, scored good, so the exclusion can
+      --     never inflate the rate by dropping rows that already succeeded;
+      --   * terminal processed/failed/reversed -> scored on its merits;
+      --   * NO RazorpayX record at all -> scored BAD. The wallet is debited and a payout_id
+      --     is assigned, but nothing exists at the gateway: money has left the CSP's wallet
+      --     with no transfer to match it. That is a defect and must be visible, not excluded.
+      --     (Observed 3x on 28-Aug-2026; zero on every other August day, against 187 other
+      --     hour-23 debits -- so it is not routine end-of-day ingestion lag.)
+      and (disp in ('OK_PAID','OK_REVERSED_not_paid')
+           or coalesce(eff_status,'NO_GATEWAY_RECORD') not in ('processing','queued'))),
 netbox_events as (
     select w.id, date(convert_timezone('Asia/Kolkata',w.created_at)) due_date,
            max(iff(d.correlation_id is not null and abs(w.amount)=d.amount
