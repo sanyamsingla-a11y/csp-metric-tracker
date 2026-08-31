@@ -6044,7 +6044,10 @@ def refresh(only_keys=None):
             print(f"  -> {len(rows)} rows")
         except Exception as e:
             print(f"  ERROR on {key}: {e}")
-            data[key] = []
+            if key not in data:
+                data[key] = []
+            else:
+                print(f"  -> keeping existing {len(data[key])} rows")
 
     # ── Earnings health: run queries and merge rows into one list ──
     if not only_keys or "earnings_health" in only_keys:
@@ -6070,7 +6073,10 @@ def refresh(only_keys=None):
             print(f"  -> {len(rows)} rows")
         except Exception as e:
             print(f"  ERROR on {key}: {e}")
-            data[key] = []
+            if key not in data:
+                data[key] = []
+            else:
+                print(f"  -> keeping existing {len(data[key])} rows")
 
     # b2i_tat: rename for frontend
     if data.get("b2i_tat"):

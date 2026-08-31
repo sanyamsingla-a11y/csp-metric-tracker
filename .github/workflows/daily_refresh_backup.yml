@@ -11,16 +11,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 5
+          fetch-depth: 10
 
       - name: Skip if already refreshed today
         id: check
         run: |
-          TODAY=$(date -u +%Y-%m-%d)
-          LAST_MSG=$(git log -1 --format=%s)
-          LAST_DATE=$(git log -1 --format=%ci | cut -d' ' -f1)
-          if [[ "$LAST_MSG" == "daily refresh"* && "$LAST_DATE" == "$TODAY" ]]; then
-            echo "Already refreshed today ($LAST_MSG at $LAST_DATE), skipping."
+          TODAY=$(date -u +%d-%m-%Y)
+          # Search last 10 commits for a "daily refresh" with today's date
+          if git log --oneline -10 --format=%s | grep -q "daily refresh $TODAY"; then
+            echo "Already refreshed today ($TODAY), skipping."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "No refresh today yet, proceeding."
