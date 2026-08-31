@@ -1,7 +1,14 @@
 /*
-  CARRY FEE — Dynamic Cohort State Tracker v2 (9 AM IST snapshot)
+  CARRY FEE — Dynamic Cohort State Tracker v3 (9 AM IST snapshot)
   ────────────────────────────────────────────────────────────────
   Stock view: sum of all states per region per day = cohort size (constant).
+
+  CHANGE vs v2:
+    Cohort population now uses CARRY_FEE_ACCRUAL_UNITS >= 1 from
+    NETBOX_CUSTODY — the actual charged devices — instead of
+    reconstructing eligibility from idle/threshold/state rules.
+    New devices enter each cadence (16 Aug, 1 Sep, 16 Sep, …)
+    when the batch job increments their accrual units.
 
   FIXES vs v1:
     1. Snapshot +1 day: each day's state = 9 AM IST NEXT day,
@@ -24,8 +31,7 @@ WITH cadence_dates AS (
 ),
 params AS (
     SELECT cohort_date,
-        COALESCE(LAG(cohort_date) OVER (ORDER BY cohort_date), '1970-01-01'::DATE) AS prev_cadence_date,
-        7 AS threshold_days, 25 AS hard_cap
+        COALESCE(LAG(cohort_date) OVER (ORDER BY cohort_date), '1970-01-01'::DATE) AS prev_cadence_date
     FROM cadence_dates
 ),
 region_map AS (
@@ -38,23 +44,36 @@ region_map AS (
     ) ca
     LEFT JOIN PROD_DB.PUBLIC.SUPPLY_MODEL sm ON ca.PARTNER_ID = sm.PARTNER_ACCOUNT_ID
 ),
+
+-- ============================================================
+-- CARRY FEE DEVICE COHORT
+--
+-- Source: NETBOX_CUSTODY CARRY_FEE_ACCRUAL_UNITS >= 1.
+-- first_charge_dt = earliest date accrual_units appeared >= 1.
+-- A device joins the cadence where first_charge_dt falls between
+-- prev_cadence_date (exclusive) and cohort_date (inclusive).
+-- CSP_ID snapshot at 9 AM IST on cohort_date for stable region.
+-- ============================================================
+
+cf_first_charge AS (
+    SELECT
+        DEVICE_ID,
+        MIN(TO_DATE(CONVERT_TIMEZONE('Asia/Kolkata', UPDATED_AT))) AS first_charge_dt
+    FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY
+    WHERE CARRY_FEE_ACCRUAL_UNITS >= 1
+      AND TO_DATE(CONVERT_TIMEZONE('Asia/Kolkata', UPDATED_AT)) >= '2026-08-16'
+    GROUP BY 1
+),
 cohort_devices AS (
-    SELECT cohort_date, DEVICE_ID, CSP_ID
-    FROM (
-        SELECT p.cohort_date, p.prev_cadence_date, nc.DEVICE_ID, nc.CSP_ID, nc.STATUS,
-            nc.WAS_EVER_DEPLOYED, nc.IDLE_START_DATE, nc.CARRY_FEE_ACCRUAL_UNITS, nc.CARRY_FEE_STATE,
-            DATEADD(day, p.threshold_days + 1, nc.IDLE_START_DATE::DATE) AS threshold_cross_date
-        FROM params p
-        INNER JOIN PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY nc
-            ON nc.UPDATED_AT < DATEADD(minute, 210, p.cohort_date::TIMESTAMP_NTZ)
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY p.cohort_date, nc.DEVICE_ID ORDER BY nc.UPDATED_AT DESC) = 1
-    ) snap
-    WHERE STATUS = 'IDLE' AND WAS_EVER_DEPLOYED = true AND IDLE_START_DATE IS NOT NULL
-        AND DATEDIFF(day, IDLE_START_DATE::DATE, cohort_date) > 7
-        AND COALESCE(CARRY_FEE_ACCRUAL_UNITS, 0) < 25
-        AND (CARRY_FEE_STATE IS NULL OR CARRY_FEE_STATE != 'PAUSED')
-        AND (CASE WHEN DAY(threshold_cross_date) IN (1,16) THEN threshold_cross_date WHEN DAY(threshold_cross_date) BETWEEN 2 AND 15 THEN DATEADD(day, 15, DATE_TRUNC('month', threshold_cross_date))::DATE ELSE DATE_TRUNC('month', DATEADD(month, 1, threshold_cross_date))::DATE END) <= cohort_date
-        AND (CASE WHEN DAY(threshold_cross_date) IN (1,16) THEN threshold_cross_date WHEN DAY(threshold_cross_date) BETWEEN 2 AND 15 THEN DATEADD(day, 15, DATE_TRUNC('month', threshold_cross_date))::DATE ELSE DATE_TRUNC('month', DATEADD(month, 1, threshold_cross_date))::DATE END) > prev_cadence_date
+    SELECT p.cohort_date, nc.DEVICE_ID, nc.CSP_ID
+    FROM params p
+    INNER JOIN cf_first_charge cf
+        ON cf.first_charge_dt <= p.cohort_date
+       AND cf.first_charge_dt > p.prev_cadence_date
+    INNER JOIN PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY nc
+        ON nc.DEVICE_ID = cf.DEVICE_ID
+       AND nc.UPDATED_AT < DATEADD(minute, 210, p.cohort_date::TIMESTAMP_NTZ)
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY p.cohort_date, nc.DEVICE_ID ORDER BY nc.UPDATED_AT DESC) = 1
 ),
 days AS (
     SELECT cd.cohort_date, DATEADD(day, s.seq - 1, cd.cohort_date)::DATE AS day_date, s.seq AS day_num
@@ -113,4 +132,4 @@ GROUP BY dds.cohort_date, rm.region,
     CASE WHEN dds.STATUS = 'IDLE' THEN 'Idle' WHEN dds.STATUS = 'RETRIEVAL_PENDING' THEN 'Retrieval Pending' WHEN dds.STATUS = 'RETURNED' THEN 'Returned' WHEN dds.STATUS = 'DEPLOYED' THEN 'Deployed' WHEN dds.STATUS = 'LOST' THEN 'Lost' ELSE 'Other' END
 ORDER BY dds.cohort_date,
     CASE COALESCE(rm.region, 'Bharat') WHEN 'Delhi' THEN 1 WHEN 'Mumbai' THEN 2 WHEN 'Bharat' THEN 3 ELSE 4 END,
-    CASE state WHEN 'Idle' THEN 1 WHEN 'Retrieval Pending' THEN 2 WHEN 'Returned' THEN 3 WHEN 'Deployed' THEN 4 WHEN 'Lost' THEN 5 ELSE 6 END
+    CASE state WHEN 'Idle' THEN 1 WHEN 'Retrieval Pending' THEN 2 WHEN 'Returned' THEN 3 WHEN 'Deployed' THEN 4 WHEN 'Lost' THEN 5 ELSE 6 END;
