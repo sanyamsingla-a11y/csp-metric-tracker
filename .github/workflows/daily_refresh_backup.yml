@@ -1,0 +1,51 @@
+name: Daily Data Refresh (Backup)
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 6:00 AM UTC = 11:30 AM IST (backup if 3 AM UTC misses)
+  workflow_dispatch:
+
+jobs:
+  check-and-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 5
+
+      - name: Skip if already refreshed today
+        id: check
+        run: |
+          TODAY=$(date -u +%Y-%m-%d)
+          LAST_MSG=$(git log -1 --format=%s)
+          LAST_DATE=$(git log -1 --format=%ci | cut -d' ' -f1)
+          if [[ "$LAST_MSG" == "daily refresh"* && "$LAST_DATE" == "$TODAY" ]]; then
+            echo "Already refreshed today ($LAST_MSG at $LAST_DATE), skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No refresh today yet, proceeding."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.check.outputs.skip == 'false'
+        with:
+          python-version: '3.12'
+
+      - name: Create .env from secret
+        if: steps.check.outputs.skip == 'false'
+        run: echo "METABASE_API_KEY:'${{ secrets.METABASE_API_KEY }}'" > .env
+
+      - name: Run refresh
+        if: steps.check.outputs.skip == 'false'
+        run: python refresh_workflows.py
+
+      - name: Commit and push
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          git config user.name "Sanyam Singla"
+          git config user.email "sanyam.singla@wiom.in"
+          git add workflow_data.js
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "daily refresh $(date -u +%d-%m-%Y)"
+          git push
