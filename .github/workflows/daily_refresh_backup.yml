@@ -2,7 +2,7 @@ name: Daily Data Refresh (Backup)
 
 on:
   schedule:
-    - cron: '0 6 * * *'   # 6:00 AM UTC = 11:30 AM IST (backup if 3 AM UTC misses)
+    - cron: '0 4 * * *'   # 4:00 AM UTC = 9:30 AM IST (backup if 3 AM UTC misses)
   workflow_dispatch:
 
 jobs:
