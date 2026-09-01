@@ -5322,9 +5322,45 @@ already_has_open_ticket AS (
                 BETWEEN DATEADD('day', -22, e.dt)
                 AND     DATEADD('day', -1,  e.dt)
 ),
+dev AS (
+    SELECT e.account_id,
+           e.dt,
+           UPPER(TRIM(w.DEVICE_ID)) AS device_id
+    FROM eligible e
+    LEFT JOIN T_WG_CUSTOMER w ON w.ACCOUNT_ID = e.account_id
+    WHERE w.DEVICE_ID IS NOT NULL
+),
+own_conns AS (
+    SELECT CUSTOMER_ID, CONNECTION_ID
+    FROM PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS
+),
+pit AS (
+    SELECT d.account_id, d.dt, d.device_id,
+           nc.STATUS                 AS status_at_r15,
+           nc.CUSTOMER_ID            AS custody_customer_id,
+           nc.CURRENT_CONNECTION_ID  AS cc,
+           nc.LAST_CONNECTION_ID     AS lc
+    FROM dev d
+    LEFT JOIN PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY nc
+      ON UPPER(TRIM(nc.DEVICE_ID)) = d.device_id
+     AND nc._FIVETRAN_START <= d.dt::TIMESTAMP_TZ
+     AND (nc._FIVETRAN_END  >  d.dt::TIMESTAMP_TZ OR nc._FIVETRAN_END IS NULL)
+),
+device_excluded AS (
+    SELECT DISTINCT account_id
+    FROM pit p
+    WHERE p.status_at_r15 IN ('IDLE','CUSTODIED','RETURNED','RETRIEVAL_PENDING')
+       OR (p.status_at_r15 = 'DEPLOYED'
+           AND COALESCE(p.custody_customer_id::VARCHAR,'~') <> p.account_id::VARCHAR
+           AND NOT EXISTS (
+                 SELECT 1 FROM own_conns c
+                 WHERE c.CUSTOMER_ID::VARCHAR = p.account_id::VARCHAR
+                   AND c.CONNECTION_ID IN (p.cc, p.lc)))
+),
 eligible_need_ticket AS (
     SELECT * FROM eligible
     WHERE account_id NOT IN (SELECT account_id FROM already_has_open_ticket)
+      AND account_id NOT IN (SELECT account_id FROM device_excluded)
 ),
 ticket_match AS (
     SELECT
