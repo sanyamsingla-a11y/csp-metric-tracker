@@ -1,28 +1,61 @@
+-- Adhoc Payments — Subtype Breakdown (weekly periods, 12-week lookback)
+
 WITH
 
 period_def AS (
-    SELECT 'D-1' AS period, DATEADD(day,-1,CURRENT_DATE()) AS p_start, DATEADD(day,-1,CURRENT_DATE()) AS p_end
-    UNION ALL SELECT 'D-2', DATEADD(day,-2,CURRENT_DATE()), DATEADD(day,-2,CURRENT_DATE())
-    UNION ALL SELECT 'D-3', DATEADD(day,-3,CURRENT_DATE()), DATEADD(day,-3,CURRENT_DATE())
-    UNION ALL SELECT 'D-4', DATEADD(day,-4,CURRENT_DATE()), DATEADD(day,-4,CURRENT_DATE())
-    UNION ALL SELECT 'D-5', DATEADD(day,-5,CURRENT_DATE()), DATEADD(day,-5,CURRENT_DATE())
-    UNION ALL SELECT 'D-6', DATEADD(day,-6,CURRENT_DATE()), DATEADD(day,-6,CURRENT_DATE())
-    UNION ALL SELECT 'D-7', DATEADD(day,-7,CURRENT_DATE()), DATEADD(day,-7,CURRENT_DATE())
-    UNION ALL SELECT 'D-8', DATEADD(day,-8,CURRENT_DATE()), DATEADD(day,-8,CURRENT_DATE())
-    UNION ALL SELECT 'W-1', DATEADD(day,-7,CURRENT_DATE()), DATEADD(day,-1,CURRENT_DATE())
-    UNION ALL SELECT 'W-2', DATEADD(day,-14,CURRENT_DATE()), DATEADD(day,-8,CURRENT_DATE())
-    UNION ALL SELECT 'M-1', DATE_TRUNC('month',DATEADD(month,-1,CURRENT_DATE())), LAST_DAY(DATEADD(month,-1,CURRENT_DATE()))
-    UNION ALL SELECT 'M-2', DATE_TRUNC('month',DATEADD(month,-2,CURRENT_DATE())), LAST_DAY(DATEADD(month,-2,CURRENT_DATE()))
+    SELECT 'W-0' AS period,
+           DATE_TRUNC('week', CURRENT_DATE()) AS p_start,
+           CURRENT_DATE() AS p_end
+    UNION ALL SELECT 'W-1',
+           DATEADD(week, -1, DATE_TRUNC('week', CURRENT_DATE())),
+           DATEADD(day, -1, DATE_TRUNC('week', CURRENT_DATE()))
+    UNION ALL SELECT 'W-2',
+           DATEADD(week, -2, DATE_TRUNC('week', CURRENT_DATE())),
+           DATEADD(day, -1, DATEADD(week, -1, DATE_TRUNC('week', CURRENT_DATE())))
+    UNION ALL SELECT 'W-3',
+           DATEADD(week, -3, DATE_TRUNC('week', CURRENT_DATE())),
+           DATEADD(day, -1, DATEADD(week, -2, DATE_TRUNC('week', CURRENT_DATE())))
+    UNION ALL SELECT 'W-4',
+           DATEADD(week, -4, DATE_TRUNC('week', CURRENT_DATE())),
+           DATEADD(day, -1, DATEADD(week, -3, DATE_TRUNC('week', CURRENT_DATE())))
+    UNION ALL SELECT 'W-5',
+           DATEADD(week, -5, DATE_TRUNC('week', CURRENT_DATE())),
+           DATEADD(day, -1, DATEADD(week, -4, DATE_TRUNC('week', CURRENT_DATE())))
+    UNION ALL SELECT 'W-6',
+           DATEADD(week, -6, DATE_TRUNC('week', CURRENT_DATE())),
+           DATEADD(day, -1, DATEADD(week, -5, DATE_TRUNC('week', CURRENT_DATE())))
+    UNION ALL SELECT 'W-7',
+           DATEADD(week, -7, DATE_TRUNC('week', CURRENT_DATE())),
+           DATEADD(day, -1, DATEADD(week, -6, DATE_TRUNC('week', CURRENT_DATE())))
+    UNION ALL SELECT 'W-8',
+           DATEADD(week, -8, DATE_TRUNC('week', CURRENT_DATE())),
+           DATEADD(day, -1, DATEADD(week, -7, DATE_TRUNC('week', CURRENT_DATE())))
+    UNION ALL SELECT 'W-9',
+           DATEADD(week, -9, DATE_TRUNC('week', CURRENT_DATE())),
+           DATEADD(day, -1, DATEADD(week, -8, DATE_TRUNC('week', CURRENT_DATE())))
+    UNION ALL SELECT 'W-10',
+           DATEADD(week, -10, DATE_TRUNC('week', CURRENT_DATE())),
+           DATEADD(day, -1, DATEADD(week, -9, DATE_TRUNC('week', CURRENT_DATE())))
+    UNION ALL SELECT 'W-11',
+           DATEADD(week, -11, DATE_TRUNC('week', CURRENT_DATE())),
+           DATEADD(day, -1, DATEADD(week, -10, DATE_TRUNC('week', CURRENT_DATE())))
+    UNION ALL SELECT 'W-12',
+           DATEADD(week, -12, DATE_TRUNC('week', CURRENT_DATE())),
+           DATEADD(day, -1, DATEADD(week, -11, DATE_TRUNC('week', CURRENT_DATE())))
 ),
 
 raw_data AS (
     SELECT
         TO_DATE(CONVERT_TIMEZONE('Asia/Kolkata', w.CREATED_AT)) AS event_date,
         ROUND(w.AMOUNT / 100.0, 2) AS amount_rs,
-        PARSE_JSON(w.REMARKS):intervention_id::STRING AS raw_iid
+        COALESCE(
+            PARSE_JSON(w.REMARKS):intervention_id::STRING,
+            w.PROGRAM_REF
+        ) AS raw_iid
     FROM PROD_DB.CSP_PAYMENT_SETTLEMENT_SERVICE_CSP_PAYMENT_SETTLEMENT_SERVICE.WALLET_LEDGER_ENTRIES w
     WHERE w._FIVETRAN_ACTIVE = TRUE
       AND w.ENTRY_TYPE IN ('INTERVENTION_CREDIT','ADHOC_ADJUSTMENT_CREDIT')
+      AND TO_DATE(CONVERT_TIMEZONE('Asia/Kolkata', w.CREATED_AT)) >= DATEADD(week, -12, DATE_TRUNC('week', CURRENT_DATE()))
 ),
 
 adhoc_data AS (
@@ -30,17 +63,26 @@ adhoc_data AS (
         event_date,
         amount_rs,
         CASE
-            WHEN raw_iid ILIKE 'april-unclaimedbonus-payout-2026%'       THEN 'april-unclaimedbonus-payout-2026'
-            WHEN raw_iid ILIKE 'csp-shifting-payout-jul21-2026%'         THEN 'csp-shifting-payout-jul21-2026'
-            WHEN raw_iid ILIKE 'csp-migration-payout-jul21-2026%'        THEN 'csp-migration-payout-jul21-2026'
-            WHEN raw_iid ILIKE 'csp-migration-shifting-payout-jul21-2026%' THEN 'csp-migration-shifting-payout-jul21-2026'
-            WHEN raw_iid ILIKE 'guarantee_program%'                      THEN 'guarantee_program'
-            WHEN raw_iid ILIKE 'pnm-isp-refund-jul2026%'                THEN 'pnm-isp-refund-jul2026'
-            WHEN raw_iid ILIKE 'pnm-isp-refund-jul15%'                  THEN 'pnm-isp-refund-jul15'
-            WHEN raw_iid ILIKE 'pnm-isp-refund-jul31%'                  THEN 'pnm-isp-refund-jul31'
-            WHEN raw_iid ILIKE 'pnm-isp-refund%'                        THEN REGEXP_SUBSTR(raw_iid, '^pnm-isp-refund-[a-z0-9]+', 1, 1, 'i')
-            WHEN raw_iid ILIKE 'installpayouts%'                         THEN 'installpayouts'
-            ELSE raw_iid
+            WHEN raw_iid IS NULL                                             THEN '(unknown)'
+            WHEN raw_iid ILIKE 'wiom-sahayata-yogdan%'
+              OR raw_iid = 'SAHAYATA-YOGDAN'                                THEN 'wiom-sahayata-yogdan'
+            WHEN raw_iid ILIKE 'guarantee_program%'                          THEN 'guarantee_program'
+            WHEN raw_iid ILIKE 'sehat_guarantee_program%'                    THEN 'sehat_guarantee_program'
+            WHEN raw_iid ILIKE 'july_guarantee_adjustment%'                  THEN 'july_guarantee_adjustment'
+            WHEN raw_iid ILIKE 'installpayouts%'                             THEN 'installpayouts'
+            WHEN raw_iid ILIKE 'pnm-isp-refund%'
+              OR raw_iid = 'PNM_ISP_REFUND'                                 THEN 'pnm-isp-refund'
+            WHEN raw_iid ILIKE 'april-unclaimedbonus%'                       THEN 'april-unclaimedbonus-payout'
+            WHEN raw_iid ILIKE 'csp-migration-shifting%'                     THEN 'csp-migration-shifting-payout'
+            WHEN raw_iid ILIKE 'csp-migration-payout%'
+              OR raw_iid = 'MIGRATION_PAYOUT'                               THEN 'csp-migration-payout'
+            WHEN raw_iid ILIKE 'csp-shifting-payout%'                        THEN 'csp-shifting-payout'
+            WHEN raw_iid = 'CARRY_FEE_REVERSAL'                             THEN 'carry-fee-reversal'
+            WHEN raw_iid ILIKE 'BASE_PAYOUT%'
+              OR raw_iid = 'SYSTEM_CORRECTION_BASE_PAYOUT'                  THEN 'base-payout-correction'
+            WHEN raw_iid = 'SYSTEM_CORRECTION_NETBOX_ORDER_CANCEL'           THEN 'netbox-order-cancel'
+            WHEN raw_iid = 'SYSTEM_CORRECTION_NETBOX_RECOVERY_RETURN'        THEN 'netbox-recovery-return'
+            ELSE '(other: ' || LEFT(raw_iid, 30) || ')'
         END AS remark_group
     FROM raw_data
 ),
@@ -58,18 +100,23 @@ agg AS (
 
 SELECT
     remark_group AS remarks,
-    MAX(CASE WHEN period='D-1' THEN total_amount END) AS "D-1",
-    MAX(CASE WHEN period='D-2' THEN total_amount END) AS "D-2",
-    MAX(CASE WHEN period='D-3' THEN total_amount END) AS "D-3",
-    MAX(CASE WHEN period='D-4' THEN total_amount END) AS "D-4",
-    MAX(CASE WHEN period='D-5' THEN total_amount END) AS "D-5",
-    MAX(CASE WHEN period='D-6' THEN total_amount END) AS "D-6",
-    MAX(CASE WHEN period='D-7' THEN total_amount END) AS "D-7",
-    MAX(CASE WHEN period='D-8' THEN total_amount END) AS "D-8",
-    MAX(CASE WHEN period='W-1' THEN total_amount END) AS "W-1",
-    MAX(CASE WHEN period='W-2' THEN total_amount END) AS "W-2",
-    MAX(CASE WHEN period='M-1' THEN total_amount END) AS "M-1",
-    MAX(CASE WHEN period='M-2' THEN total_amount END) AS "M-2"
+    MAX(CASE WHEN period='W-0'  THEN total_amount END) AS "W-0",
+    MAX(CASE WHEN period='W-1'  THEN total_amount END) AS "W-1",
+    MAX(CASE WHEN period='W-2'  THEN total_amount END) AS "W-2",
+    MAX(CASE WHEN period='W-3'  THEN total_amount END) AS "W-3",
+    MAX(CASE WHEN period='W-4'  THEN total_amount END) AS "W-4",
+    MAX(CASE WHEN period='W-5'  THEN total_amount END) AS "W-5",
+    MAX(CASE WHEN period='W-6'  THEN total_amount END) AS "W-6",
+    MAX(CASE WHEN period='W-7'  THEN total_amount END) AS "W-7",
+    MAX(CASE WHEN period='W-8'  THEN total_amount END) AS "W-8",
+    MAX(CASE WHEN period='W-9'  THEN total_amount END) AS "W-9",
+    MAX(CASE WHEN period='W-10' THEN total_amount END) AS "W-10",
+    MAX(CASE WHEN period='W-11' THEN total_amount END) AS "W-11",
+    MAX(CASE WHEN period='W-12' THEN total_amount END) AS "W-12",
+    MAX(CASE WHEN period='W-0'  THEN txn_count END) AS "W-0_txns",
+    MAX(CASE WHEN period='W-1'  THEN txn_count END) AS "W-1_txns",
+    MAX(CASE WHEN period='W-2'  THEN txn_count END) AS "W-2_txns",
+    MAX(CASE WHEN period='W-3'  THEN txn_count END) AS "W-3_txns"
 FROM agg
 GROUP BY remark_group
 ORDER BY remark_group

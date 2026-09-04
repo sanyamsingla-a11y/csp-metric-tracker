@@ -345,7 +345,7 @@ function loadMetric(key, wfName, type) {
     }
     const adhocData = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['adhoc_payments_breakdown'] : null;
     if (adhocData && adhocData.length > 0) {
-      const ADHOC_COLS = ['D-1','D-2','D-3','D-4','D-5','D-6','D-7','D-8','W-1','W-2','M-1','M-2'];
+      const ADHOC_COLS = ['W-0','W-1','W-2','W-3','W-4','W-5','W-6','W-7','W-8','W-9','W-10','W-11','W-12','W-0_txns','W-1_txns','W-2_txns','W-3_txns'];
       html += '<div class="section-label" style="margin-top:36px">Adhoc Payments — Subtype Breakdown</div>';
       html += buildTableHtml(adhocData, ADHOC_COLS, false);
     }
