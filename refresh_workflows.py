@@ -3153,20 +3153,20 @@ q2 AS (
     FULL OUTER JOIN deposit_additions d ON w.dt = d.dt
 ),
 t1 AS (
-    SELECT DATE(modified_time) AS dt, da.device_id
+    SELECT modified_time::DATE AS dt, da.device_id
     FROM PROD_DB.POSTGRES_RDS_INVENTORY_INVENTORY.T_DEVICE_AUDIT da
     WHERE da.status = 'IN_WAREHOUSE'
-      AND DATE(modified_time) BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1
+      AND da.modified_time >= CURRENT_DATE - 15
       AND EXISTS (
           SELECT 1 FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY nc
           WHERE nc.DEVICE_ID = da.device_id
       )
 ),
 t2 AS (
-    SELECT DATE(created_at) AS dt, device_id
-    FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.CUSTODY_AUDIT_LOG
-    WHERE to_state = 'RETURNED'
-      AND DATE(created_at) BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1
+    SELECT CONVERT_TIMEZONE('Asia/Kolkata', updated_at)::DATE AS dt, device_id
+    FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY
+    WHERE status = 'RETURNED'
+      AND updated_at >= CURRENT_DATE - 15
 ),
 t1_daily AS (SELECT dt, COUNT(DISTINCT device_id) AS t1_ct FROM t1 GROUP BY dt),
 t2_daily AS (SELECT dt, COUNT(DISTINCT device_id) AS t2_ct FROM t2 GROUP BY dt),
@@ -3271,20 +3271,20 @@ q2 AS (
     FULL OUTER JOIN deposit_additions d ON w.dt = d.dt
 ),
 t1 AS (
-    SELECT DATE(modified_time) AS dt, da.device_id
+    SELECT modified_time::DATE AS dt, da.device_id
     FROM PROD_DB.POSTGRES_RDS_INVENTORY_INVENTORY.T_DEVICE_AUDIT da
     WHERE da.status = 'IN_WAREHOUSE'
-      AND DATE(modified_time) BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1
+      AND da.modified_time >= CURRENT_DATE - 15
       AND EXISTS (
           SELECT 1 FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY nc
           WHERE nc.DEVICE_ID = da.device_id
       )
 ),
 t2 AS (
-    SELECT DATE(created_at) AS dt, device_id
-    FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.CUSTODY_AUDIT_LOG
-    WHERE to_state = 'RETURNED'
-      AND DATE(created_at) BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1
+    SELECT CONVERT_TIMEZONE('Asia/Kolkata', updated_at)::DATE AS dt, device_id
+    FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY
+    WHERE status = 'RETURNED'
+      AND updated_at >= CURRENT_DATE - 15
 ),
 t1_daily AS (SELECT dt, COUNT(DISTINCT device_id) AS t1_ct FROM t1 GROUP BY dt),
 t2_daily AS (SELECT dt, COUNT(DISTINCT device_id) AS t2_ct FROM t2 GROUP BY dt),
