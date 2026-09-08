@@ -4146,6 +4146,330 @@ GROUP BY metric, sort_order
 ORDER BY sort_order
 """
 
+QUERIES["st_reopen_rate"] = r"""
+WITH csp_universe AS (
+  SELECT DISTINCT PARTNER_ID, CSP_ID
+  FROM PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT
+  WHERE _FIVETRAN_ACTIVE = TRUE AND STATUS = 'ACTIVE' AND PARTNER_ID IS NOT NULL
+),
+stm_base AS (
+  SELECT stm.TICKET_ID::VARCHAR AS TICKET_ID,
+    DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) AS dt
+  FROM PROD_DB.PUBLIC.SERVICE_TICKET_MODEL stm
+  INNER JOIN csp_universe csp
+    ON csp.PARTNER_ID::INT = COALESCE(stm.CURRENT_PARTNER_ACCOUNT_ID::INT, stm.LCO_ACCOUNT_ID::INT)
+  WHERE stm.TICKET_ID IS NOT NULL
+    AND REGEXP_LIKE(stm.TICKET_ID, '^[0-9]+$')
+    AND (
+      stm.LAST_TITLE ILIKE 'Internet Issues|%' OR stm.LAST_TITLE ILIKE 'Internet Issues |%'
+      OR stm.LAST_TITLE ILIKE 'Others|Recharge expired (Service issue)%'
+      OR stm.LAST_TITLE ILIKE 'Others|TV/Camera issue%'
+      OR stm.LAST_TITLE ILIKE 'Others|Adapter issue%'
+      OR stm.LAST_TITLE ILIKE 'Shifting Request|Shift to New Address%'
+      OR stm.LAST_TITLE ILIKE 'Shifting Request|Shift Within My Home%'
+    )
+    AND DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) >= DATEADD('month', -3, DATE_TRUNC('month', CURRENT_DATE()))
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY stm.TICKET_ID ORDER BY stm.TICKET_ADDED_TIME DESC) = 1
+),
+srs_complaint_counts AS (
+  SELECT TICKET_ID::VARCHAR AS TICKET_ID, COUNT(DISTINCT COMPLAINT_ID) AS complaint_cnt
+  FROM PROD_DB.CSP_SUPPORT_RESOLUTION_SERVICE_CSP_SUPPORT_RESOLUTION_SERVICE.COMPLAINTS
+  WHERE _FIVETRAN_ACTIVE = TRUE
+    AND TICKET_ID NOT LIKE 'prod-test%' AND REGEXP_LIKE(TICKET_ID, '^[0-9]+$')
+  GROUP BY TICKET_ID
+),
+combined AS (
+  SELECT s.dt, s.TICKET_ID,
+    CASE WHEN c.TICKET_ID IS NOT NULL THEN 1 ELSE 0 END AS in_srs,
+    COALESCE(c.complaint_cnt, 0) AS complaint_cnt,
+    CASE WHEN COALESCE(c.complaint_cnt, 0) > 1 THEN 1 ELSE 0 END AS is_reopened,
+    GREATEST(COALESCE(c.complaint_cnt, 0) - 1, 0) AS reopen_times
+  FROM stm_base s
+  LEFT JOIN srs_complaint_counts c ON c.TICKET_ID = s.TICKET_ID
+),
+flagged AS (
+  SELECT *,
+    dt = DATEADD('day',-1,CURRENT_DATE()) AS is_d1,
+    dt = DATEADD('day',-2,CURRENT_DATE()) AS is_d2,
+    dt = DATEADD('day',-3,CURRENT_DATE()) AS is_d3,
+    dt >= DATE_TRUNC('week',DATEADD('week',-1,CURRENT_DATE())) AND dt < DATE_TRUNC('week',CURRENT_DATE()) AS is_w1,
+    dt >= DATE_TRUNC('week',DATEADD('week',-2,CURRENT_DATE())) AND dt < DATE_TRUNC('week',DATEADD('week',-1,CURRENT_DATE())) AS is_w2,
+    dt >= DATE_TRUNC('week',DATEADD('week',-3,CURRENT_DATE())) AND dt < DATE_TRUNC('week',DATEADD('week',-2,CURRENT_DATE())) AS is_w3,
+    dt >= DATE_TRUNC('month',DATEADD('month',-1,CURRENT_DATE())) AND dt < DATE_TRUNC('month',CURRENT_DATE()) AS is_m1,
+    dt >= DATE_TRUNC('month',DATEADD('month',-2,CURRENT_DATE())) AND dt < DATE_TRUNC('month',DATEADD('month',-1,CURRENT_DATE())) AS is_m2,
+    dt >= DATE_TRUNC('month',DATEADD('month',-3,CURRENT_DATE())) AND dt < DATE_TRUNC('month',DATEADD('month',-2,CURRENT_DATE())) AS is_m3
+  FROM combined
+)
+SELECT 'STM Tickets' AS "KPI",
+  SUM(IFF(is_d1,1,0)) AS "D-1", SUM(IFF(is_d2,1,0)) AS "D-2", SUM(IFF(is_d3,1,0)) AS "D-3",
+  SUM(IFF(is_w1,1,0)) AS "W-1", SUM(IFF(is_w2,1,0)) AS "W-2", SUM(IFF(is_w3,1,0)) AS "W-3",
+  SUM(IFF(is_m1,1,0)) AS "M-1", SUM(IFF(is_m2,1,0)) AS "M-2", SUM(IFF(is_m3,1,0)) AS "M-3"
+FROM flagged
+UNION ALL SELECT 'In SRS',
+  SUM(IFF(is_d1 AND in_srs=1,1,0)),SUM(IFF(is_d2 AND in_srs=1,1,0)),SUM(IFF(is_d3 AND in_srs=1,1,0)),
+  SUM(IFF(is_w1 AND in_srs=1,1,0)),SUM(IFF(is_w2 AND in_srs=1,1,0)),SUM(IFF(is_w3 AND in_srs=1,1,0)),
+  SUM(IFF(is_m1 AND in_srs=1,1,0)),SUM(IFF(is_m2 AND in_srs=1,1,0)),SUM(IFF(is_m3 AND in_srs=1,1,0)) FROM flagged
+UNION ALL SELECT 'Reopened',
+  SUM(IFF(is_d1 AND is_reopened=1,1,0)),SUM(IFF(is_d2 AND is_reopened=1,1,0)),SUM(IFF(is_d3 AND is_reopened=1,1,0)),
+  SUM(IFF(is_w1 AND is_reopened=1,1,0)),SUM(IFF(is_w2 AND is_reopened=1,1,0)),SUM(IFF(is_w3 AND is_reopened=1,1,0)),
+  SUM(IFF(is_m1 AND is_reopened=1,1,0)),SUM(IFF(is_m2 AND is_reopened=1,1,0)),SUM(IFF(is_m3 AND is_reopened=1,1,0)) FROM flagged
+UNION ALL SELECT 'Rate %',
+  ROUND(100.0*SUM(IFF(is_d1 AND is_reopened=1,1,0))/NULLIF(SUM(IFF(is_d1,1,0)),0),1),
+  ROUND(100.0*SUM(IFF(is_d2 AND is_reopened=1,1,0))/NULLIF(SUM(IFF(is_d2,1,0)),0),1),
+  ROUND(100.0*SUM(IFF(is_d3 AND is_reopened=1,1,0))/NULLIF(SUM(IFF(is_d3,1,0)),0),1),
+  ROUND(100.0*SUM(IFF(is_w1 AND is_reopened=1,1,0))/NULLIF(SUM(IFF(is_w1,1,0)),0),1),
+  ROUND(100.0*SUM(IFF(is_w2 AND is_reopened=1,1,0))/NULLIF(SUM(IFF(is_w2,1,0)),0),1),
+  ROUND(100.0*SUM(IFF(is_w3 AND is_reopened=1,1,0))/NULLIF(SUM(IFF(is_w3,1,0)),0),1),
+  ROUND(100.0*SUM(IFF(is_m1 AND is_reopened=1,1,0))/NULLIF(SUM(IFF(is_m1,1,0)),0),1),
+  ROUND(100.0*SUM(IFF(is_m2 AND is_reopened=1,1,0))/NULLIF(SUM(IFF(is_m2,1,0)),0),1),
+  ROUND(100.0*SUM(IFF(is_m3 AND is_reopened=1,1,0))/NULLIF(SUM(IFF(is_m3,1,0)),0),1) FROM flagged
+UNION ALL SELECT '1x',
+  SUM(IFF(is_d1 AND reopen_times=1,1,0)),SUM(IFF(is_d2 AND reopen_times=1,1,0)),SUM(IFF(is_d3 AND reopen_times=1,1,0)),
+  SUM(IFF(is_w1 AND reopen_times=1,1,0)),SUM(IFF(is_w2 AND reopen_times=1,1,0)),SUM(IFF(is_w3 AND reopen_times=1,1,0)),
+  SUM(IFF(is_m1 AND reopen_times=1,1,0)),SUM(IFF(is_m2 AND reopen_times=1,1,0)),SUM(IFF(is_m3 AND reopen_times=1,1,0)) FROM flagged
+UNION ALL SELECT '2x',
+  SUM(IFF(is_d1 AND reopen_times=2,1,0)),SUM(IFF(is_d2 AND reopen_times=2,1,0)),SUM(IFF(is_d3 AND reopen_times=2,1,0)),
+  SUM(IFF(is_w1 AND reopen_times=2,1,0)),SUM(IFF(is_w2 AND reopen_times=2,1,0)),SUM(IFF(is_w3 AND reopen_times=2,1,0)),
+  SUM(IFF(is_m1 AND reopen_times=2,1,0)),SUM(IFF(is_m2 AND reopen_times=2,1,0)),SUM(IFF(is_m3 AND reopen_times=2,1,0)) FROM flagged
+UNION ALL SELECT '3x',
+  SUM(IFF(is_d1 AND reopen_times=3,1,0)),SUM(IFF(is_d2 AND reopen_times=3,1,0)),SUM(IFF(is_d3 AND reopen_times=3,1,0)),
+  SUM(IFF(is_w1 AND reopen_times=3,1,0)),SUM(IFF(is_w2 AND reopen_times=3,1,0)),SUM(IFF(is_w3 AND reopen_times=3,1,0)),
+  SUM(IFF(is_m1 AND reopen_times=3,1,0)),SUM(IFF(is_m2 AND reopen_times=3,1,0)),SUM(IFF(is_m3 AND reopen_times=3,1,0)) FROM flagged
+UNION ALL SELECT '3+',
+  SUM(IFF(is_d1 AND reopen_times>3,1,0)),SUM(IFF(is_d2 AND reopen_times>3,1,0)),SUM(IFF(is_d3 AND reopen_times>3,1,0)),
+  SUM(IFF(is_w1 AND reopen_times>3,1,0)),SUM(IFF(is_w2 AND reopen_times>3,1,0)),SUM(IFF(is_w3 AND reopen_times>3,1,0)),
+  SUM(IFF(is_m1 AND reopen_times>3,1,0)),SUM(IFF(is_m2 AND reopen_times>3,1,0)),SUM(IFF(is_m3 AND reopen_times>3,1,0)) FROM flagged
+"""
+
+QUERIES["st_calls_per_ticket_agent"] = r"""
+WITH csp_universe AS (
+  SELECT DISTINCT PARTNER_ID
+  FROM PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT
+  WHERE _FIVETRAN_ACTIVE = TRUE AND STATUS = 'ACTIVE' AND PARTNER_ID IS NOT NULL
+),
+stm_tickets AS (
+  SELECT
+    stm.TICKET_ID,
+    DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)   AS created_ist,
+    DATEADD(MINUTE, 330, stm.FINAL_RESOLVED_TIME)  AS resolved_ist,
+    DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) AS dt,
+    stm.CUSTOMER_MOBILE,
+    stm.CUSTOMER_ACCOUNT_ID
+  FROM PROD_DB.PUBLIC.SERVICE_TICKET_MODEL stm
+  INNER JOIN csp_universe csp
+    ON csp.PARTNER_ID::INT = COALESCE(stm.CURRENT_PARTNER_ACCOUNT_ID::INT, stm.LCO_ACCOUNT_ID::INT)
+  WHERE stm.TICKET_ID IS NOT NULL
+    AND REGEXP_LIKE(stm.TICKET_ID, '^[0-9]+$')
+    AND (
+      stm.LAST_TITLE ILIKE 'Internet Issues|%' OR stm.LAST_TITLE ILIKE 'Internet Issues |%'
+      OR stm.LAST_TITLE ILIKE 'Others|Recharge expired (Service issue)%'
+      OR stm.LAST_TITLE ILIKE 'Others|TV/Camera issue%'
+      OR stm.LAST_TITLE ILIKE 'Others|Adapter issue%'
+      OR stm.LAST_TITLE ILIKE 'Shifting Request|Shift to New Address%'
+      OR stm.LAST_TITLE ILIKE 'Shifting Request|Shift Within My Home%'
+    )
+    AND stm.IS_RESOLVED = 1
+    AND stm.FINAL_RESOLVED_TIME IS NOT NULL
+    AND DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) >= DATEADD('day', -31, CURRENT_DATE())
+    AND DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) < CURRENT_DATE()
+),
+customer_mobile AS (
+  SELECT ACCOUNT_ID, MOBILE FROM PROD_DB.PUBLIC.T_WG_CUSTOMER WHERE MOBILE IS NOT NULL
+),
+ticket_mobiles AS (
+  SELECT TICKET_ID, CUSTOMER_MOBILE AS mobile FROM stm_tickets WHERE CUSTOMER_MOBILE IS NOT NULL
+  UNION
+  SELECT t.TICKET_ID, c.MOBILE FROM stm_tickets t JOIN customer_mobile c ON c.ACCOUNT_ID = t.CUSTOMER_ACCOUNT_ID::INT WHERE c.MOBILE IS NOT NULL
+),
+calls_open_to_close AS (
+  SELECT t.TICKET_ID, t.dt, COUNT(DISTINCT a.CALL_ID) AS calls
+  FROM stm_tickets t
+  JOIN ticket_mobiles tm ON tm.TICKET_ID = t.TICKET_ID
+  LEFT JOIN PROD_DB.PUBLIC.AMEYO_CALL_DETAILS_REPORT a
+    ON a.PHONE = tm.mobile AND a.CALL_TIME >= t.created_ist AND a.CALL_TIME <= t.resolved_ist
+  GROUP BY t.TICKET_ID, t.dt
+),
+calls_24h_after_close AS (
+  SELECT t.TICKET_ID, t.dt, COUNT(DISTINCT a.CALL_ID) AS calls
+  FROM stm_tickets t
+  JOIN ticket_mobiles tm ON tm.TICKET_ID = t.TICKET_ID
+  LEFT JOIN PROD_DB.PUBLIC.AMEYO_CALL_DETAILS_REPORT a
+    ON a.PHONE = tm.mobile AND a.CALL_TIME > t.resolved_ist AND a.CALL_TIME <= DATEADD('hour', 24, t.resolved_ist)
+  GROUP BY t.TICKET_ID, t.dt
+),
+daily_oc AS (
+  SELECT dt,
+    COUNT(*) AS total_tickets,
+    SUM(IFF(calls>0,1,0)) AS with_calls,
+    ROUND(100.0*with_calls/NULLIF(total_tickets,0),1) AS pct_with_calls,
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY calls),2) AS p50,
+    ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY calls),2) AS p75,
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY calls),2) AS p90
+  FROM calls_open_to_close GROUP BY dt
+),
+daily_24h AS (
+  SELECT dt,
+    SUM(IFF(calls>0,1,0)) AS with_calls_24h,
+    ROUND(100.0*with_calls_24h/NULLIF(COUNT(*),0),1) AS pct_24h,
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY calls),2) AS p50,
+    ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY calls),2) AS p75,
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY calls),2) AS p90
+  FROM calls_24h_after_close GROUP BY dt
+),
+unpivoted AS (
+  SELECT dt, 1 AS s, 'Total Tickets (Resolved)' AS metric, total_tickets AS val FROM daily_oc
+  UNION ALL SELECT dt, 2, 'Tickets With Calls (open->close)', with_calls FROM daily_oc
+  UNION ALL SELECT dt, 3, '% With Calls (open->close)', pct_with_calls FROM daily_oc
+  UNION ALL SELECT dt, 4, 'P50 Calls (open->close)', p50 FROM daily_oc
+  UNION ALL SELECT dt, 5, 'P75 Calls (open->close)', p75 FROM daily_oc
+  UNION ALL SELECT dt, 6, 'P90 Calls (open->close)', p90 FROM daily_oc
+  UNION ALL SELECT dt, 7, 'Tickets With Calls (24h after close)', with_calls_24h FROM daily_24h
+  UNION ALL SELECT dt, 8, '% With Calls (24h after close)', pct_24h FROM daily_24h
+  UNION ALL SELECT dt, 9, 'P50 Calls (24h after close)', p50 FROM daily_24h
+  UNION ALL SELECT dt, 10, 'P75 Calls (24h after close)', p75 FROM daily_24h
+  UNION ALL SELECT dt, 11, 'P90 Calls (24h after close)', p90 FROM daily_24h
+)
+SELECT
+  metric AS "Metric",
+  MAX(CASE WHEN dt = DATEADD('day',-1,CURRENT_DATE()) THEN val END) AS "T-1",
+  MAX(CASE WHEN dt = DATEADD('day',-2,CURRENT_DATE()) THEN val END) AS "T-2",
+  MAX(CASE WHEN dt = DATEADD('day',-3,CURRENT_DATE()) THEN val END) AS "T-3",
+  MAX(CASE WHEN dt = DATEADD('day',-4,CURRENT_DATE()) THEN val END) AS "T-4",
+  MAX(CASE WHEN dt = DATEADD('day',-5,CURRENT_DATE()) THEN val END) AS "T-5",
+  MAX(CASE WHEN dt = DATEADD('day',-6,CURRENT_DATE()) THEN val END) AS "T-6",
+  MAX(CASE WHEN dt = DATEADD('day',-7,CURRENT_DATE()) THEN val END) AS "T-7",
+  MAX(CASE WHEN dt = DATEADD('day',-8,CURRENT_DATE()) THEN val END) AS "T-8",
+  ROUND(AVG(val),1) AS "30D Avg",
+  ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "30D Median",
+  ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "30D P90"
+FROM unpivoted
+GROUP BY s, metric
+ORDER BY s
+"""
+
+QUERIES["st_calls_per_ticket_csp"] = r"""
+WITH csp_universe AS (
+  SELECT DISTINCT PARTNER_ID
+  FROM PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT
+  WHERE _FIVETRAN_ACTIVE = TRUE AND STATUS = 'ACTIVE' AND PARTNER_ID IS NOT NULL
+),
+stm_tickets AS (
+  SELECT
+    stm.TICKET_ID,
+    DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)   AS created_ist,
+    DATEADD(MINUTE, 330, stm.FINAL_RESOLVED_TIME)  AS resolved_ist,
+    DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) AS dt,
+    stm.CUSTOMER_MOBILE,
+    stm.CUSTOMER_ACCOUNT_ID
+  FROM PROD_DB.PUBLIC.SERVICE_TICKET_MODEL stm
+  INNER JOIN csp_universe csp
+    ON csp.PARTNER_ID::INT = COALESCE(stm.CURRENT_PARTNER_ACCOUNT_ID::INT, stm.LCO_ACCOUNT_ID::INT)
+  WHERE stm.TICKET_ID IS NOT NULL
+    AND REGEXP_LIKE(stm.TICKET_ID, '^[0-9]+$')
+    AND (
+      stm.LAST_TITLE ILIKE 'Internet Issues|%' OR stm.LAST_TITLE ILIKE 'Internet Issues |%'
+      OR stm.LAST_TITLE ILIKE 'Others|Recharge expired (Service issue)%'
+      OR stm.LAST_TITLE ILIKE 'Others|TV/Camera issue%'
+      OR stm.LAST_TITLE ILIKE 'Others|Adapter issue%'
+      OR stm.LAST_TITLE ILIKE 'Shifting Request|Shift to New Address%'
+      OR stm.LAST_TITLE ILIKE 'Shifting Request|Shift Within My Home%'
+    )
+    AND stm.IS_RESOLVED = 1
+    AND stm.FINAL_RESOLVED_TIME IS NOT NULL
+    AND DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) >= DATEADD('day', -31, CURRENT_DATE())
+    AND DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) < CURRENT_DATE()
+),
+customer_mobile AS (
+  SELECT ACCOUNT_ID, MOBILE FROM PROD_DB.PUBLIC.T_WG_CUSTOMER WHERE MOBILE IS NOT NULL
+),
+ticket_mobiles AS (
+  SELECT TICKET_ID, CUSTOMER_MOBILE AS mobile FROM stm_tickets WHERE CUSTOMER_MOBILE IS NOT NULL
+  UNION
+  SELECT t.TICKET_ID, c.MOBILE FROM stm_tickets t JOIN customer_mobile c ON c.ACCOUNT_ID = t.CUSTOMER_ACCOUNT_ID::INT WHERE c.MOBILE IS NOT NULL
+),
+all_calls AS (
+  SELECT CALL_ID AS call_id, RIGHT(FROM_NUMBER, 10) AS mobile, CREATED_AT AS call_time_ist
+  FROM PROD_DB.POSTGRES_RDS_PARTNER_CALL_LOG_IVR.USER_CONNECTION_CALL_LOGS
+  WHERE CREATED_AT >= DATEADD('day', -63, CURRENT_TIMESTAMP()) AND _FIVETRAN_DELETED = FALSE
+  UNION ALL
+  SELECT CALL_ID, RIGHT(TO_NUMBER, 10), CREATED_AT
+  FROM PROD_DB.POSTGRES_RDS_PARTNER_CALL_LOG_IVR.USER_CONNECTION_CALL_LOGS
+  WHERE CREATED_AT >= DATEADD('day', -63, CURRENT_TIMESTAMP()) AND _FIVETRAN_DELETED = FALSE
+  UNION ALL
+  SELECT ID::VARCHAR, RIGHT(FROM_NUMBER, 10), CREATED_AT
+  FROM PROD_DB.POSTGRES_RDS_PARTNER_SERVICE_DB_PUBLIC.CALL_LOG
+  WHERE CREATED_AT >= DATEADD('day', -63, CURRENT_TIMESTAMP()) AND _FIVETRAN_DELETED = FALSE
+  UNION ALL
+  SELECT ID::VARCHAR, RIGHT(TO_NUMBER, 10), CREATED_AT
+  FROM PROD_DB.POSTGRES_RDS_PARTNER_SERVICE_DB_PUBLIC.CALL_LOG
+  WHERE CREATED_AT >= DATEADD('day', -63, CURRENT_TIMESTAMP()) AND _FIVETRAN_DELETED = FALSE
+),
+calls_open_to_close AS (
+  SELECT t.TICKET_ID, t.dt, COUNT(DISTINCT a.call_id) AS calls
+  FROM stm_tickets t
+  JOIN ticket_mobiles tm ON tm.TICKET_ID = t.TICKET_ID
+  LEFT JOIN all_calls a
+    ON a.mobile = RIGHT(tm.mobile, 10) AND a.call_time_ist >= t.created_ist AND a.call_time_ist <= t.resolved_ist
+  GROUP BY t.TICKET_ID, t.dt
+),
+calls_24h_after_close AS (
+  SELECT t.TICKET_ID, t.dt, COUNT(DISTINCT a.call_id) AS calls
+  FROM stm_tickets t
+  JOIN ticket_mobiles tm ON tm.TICKET_ID = t.TICKET_ID
+  LEFT JOIN all_calls a
+    ON a.mobile = RIGHT(tm.mobile, 10) AND a.call_time_ist > t.resolved_ist AND a.call_time_ist <= DATEADD('hour', 24, t.resolved_ist)
+  GROUP BY t.TICKET_ID, t.dt
+),
+daily_oc AS (
+  SELECT dt,
+    COUNT(*) AS total_tickets,
+    SUM(IFF(calls>0,1,0)) AS with_calls,
+    ROUND(100.0*with_calls/NULLIF(total_tickets,0),1) AS pct_with_calls,
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY calls),2) AS p50,
+    ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY calls),2) AS p75,
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY calls),2) AS p90
+  FROM calls_open_to_close GROUP BY dt
+),
+daily_24h AS (
+  SELECT dt,
+    SUM(IFF(calls>0,1,0)) AS with_calls_24h,
+    ROUND(100.0*with_calls_24h/NULLIF(COUNT(*),0),1) AS pct_24h,
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY calls),2) AS p50,
+    ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY calls),2) AS p75,
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY calls),2) AS p90
+  FROM calls_24h_after_close GROUP BY dt
+),
+unpivoted AS (
+  SELECT dt, 1 AS s, 'Total Tickets (Resolved)' AS metric, total_tickets AS val FROM daily_oc
+  UNION ALL SELECT dt, 2, 'Tickets With Calls (open->close)', with_calls FROM daily_oc
+  UNION ALL SELECT dt, 3, '% With Calls (open->close)', pct_with_calls FROM daily_oc
+  UNION ALL SELECT dt, 4, 'P50 Calls (open->close)', p50 FROM daily_oc
+  UNION ALL SELECT dt, 5, 'P75 Calls (open->close)', p75 FROM daily_oc
+  UNION ALL SELECT dt, 6, 'P90 Calls (open->close)', p90 FROM daily_oc
+  UNION ALL SELECT dt, 7, 'Tickets With Calls (24h after close)', with_calls_24h FROM daily_24h
+  UNION ALL SELECT dt, 8, '% With Calls (24h after close)', pct_24h FROM daily_24h
+  UNION ALL SELECT dt, 9, 'P50 Calls (24h after close)', p50 FROM daily_24h
+  UNION ALL SELECT dt, 10, 'P75 Calls (24h after close)', p75 FROM daily_24h
+  UNION ALL SELECT dt, 11, 'P90 Calls (24h after close)', p90 FROM daily_24h
+)
+SELECT
+  metric AS "Metric",
+  MAX(CASE WHEN dt = DATEADD('day',-1,CURRENT_DATE()) THEN val END) AS "T-1",
+  MAX(CASE WHEN dt = DATEADD('day',-2,CURRENT_DATE()) THEN val END) AS "T-2",
+  MAX(CASE WHEN dt = DATEADD('day',-3,CURRENT_DATE()) THEN val END) AS "T-3",
+  MAX(CASE WHEN dt = DATEADD('day',-4,CURRENT_DATE()) THEN val END) AS "T-4",
+  MAX(CASE WHEN dt = DATEADD('day',-5,CURRENT_DATE()) THEN val END) AS "T-5",
+  MAX(CASE WHEN dt = DATEADD('day',-6,CURRENT_DATE()) THEN val END) AS "T-6",
+  MAX(CASE WHEN dt = DATEADD('day',-7,CURRENT_DATE()) THEN val END) AS "T-7",
+  MAX(CASE WHEN dt = DATEADD('day',-8,CURRENT_DATE()) THEN val END) AS "T-8",
+  ROUND(AVG(val),1) AS "30D Avg",
+  ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "30D Median",
+  ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "30D P90"
+FROM unpivoted
+GROUP BY s, metric
+ORDER BY s
+"""
+
 QUERIES["st_raw_match_rate"] = r"""
 WITH csp_universe AS (
   SELECT DISTINCT PARTNER_ID, CSP_ID FROM PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT

@@ -665,6 +665,27 @@ function loadMetric(key, wfName, type) {
         html += buildTableHtml(sRows, TAT_COLS, false);
       });
     }
+    // --- Reopen Rate ---
+    const reopenRows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['st_reopen_rate'] : null;
+    if (reopenRows && reopenRows.length > 0) {
+      const REOPEN_COLS = ['D-1','D-2','D-3','W-1','W-2','W-3','M-1','M-2','M-3'];
+      html += '<div class="section-label" style="margin-top:36px">Service Ticket — Reopen Rate</div>';
+      html += buildTableHtml(reopenRows, REOPEN_COLS, false, null, false);
+    }
+    // --- Calls per Ticket — Calling Agent ---
+    const callsAgentRows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['st_calls_per_ticket_agent'] : null;
+    if (callsAgentRows && callsAgentRows.length > 0) {
+      const CALLS_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','30D Avg','30D Median','30D P90'];
+      html += '<div class="section-label" style="margin-top:36px">Calls per Service Ticket — Calling Agent</div>';
+      html += buildTableHtml(callsAgentRows, CALLS_COLS, false, null, false);
+    }
+    // --- Calls per Ticket — CSP ---
+    const callsCspRows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['st_calls_per_ticket_csp'] : null;
+    if (callsCspRows && callsCspRows.length > 0) {
+      const CALLS_COLS2 = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','30D Avg','30D Median','30D P90'];
+      html += '<div class="section-label" style="margin-top:36px">Calls per Service Ticket — CSP</div>';
+      html += buildTableHtml(callsCspRows, CALLS_COLS2, false, null, false);
+    }
     if (!html) {
       html = '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
     }
