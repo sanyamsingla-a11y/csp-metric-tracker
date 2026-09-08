@@ -1,4 +1,10 @@
 {
   "buildCommand": "",
-  "outputDirectory": "."
+  "outputDirectory": ".",
+  "crons": [
+    {
+      "path": "/api/trigger-refresh",
+      "schedule": "0 3 * * *"
+    }
+  ]
 }
