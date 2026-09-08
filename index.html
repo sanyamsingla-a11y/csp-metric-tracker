@@ -645,7 +645,7 @@ function loadMetric(key, wfName, type) {
     // --- Assignment & Closure Breakdown (on top) ---
     const acRows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['service_tickets_assignment_closure'] : null;
     if (acRows && acRows.length > 0) {
-      const AC_COLS = ['TODAY','T-1','T-2','T-3','T-4','T-5','T-6','T-7','AVERAGE','MEDIAN','P90'];
+      const AC_COLS = ['TODAY','T-1','T-2','T-3','T-4','T-5','T-6','T-7','AVG','MEDIAN','P90'];
       html += '<div class="section-label">Ticket Assignment & Closure Breakdown</div>';
       html += buildTableHtml(acRows, AC_COLS, false, null, false);
     }

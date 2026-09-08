@@ -4200,7 +4200,7 @@ flagged AS (
     dt >= DATE_TRUNC('month',DATEADD('month',-3,CURRENT_DATE())) AND dt < DATE_TRUNC('month',DATEADD('month',-2,CURRENT_DATE())) AS is_m3
   FROM combined
 )
-SELECT 'STM Tickets' AS "KPI",
+SELECT 'STM Tickets' AS "Metric",
   SUM(IFF(is_d1,1,0)) AS "D-1", SUM(IFF(is_d2,1,0)) AS "D-2", SUM(IFF(is_d3,1,0)) AS "D-3",
   SUM(IFF(is_w1,1,0)) AS "W-1", SUM(IFF(is_w2,1,0)) AS "W-2", SUM(IFF(is_w3,1,0)) AS "W-3",
   SUM(IFF(is_m1,1,0)) AS "M-1", SUM(IFF(is_m2,1,0)) AS "M-2", SUM(IFF(is_m3,1,0)) AS "M-3"
@@ -4353,6 +4353,27 @@ WITH csp_universe AS (
   FROM PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT
   WHERE _FIVETRAN_ACTIVE = TRUE AND STATUS = 'ACTIVE' AND PARTNER_ID IS NOT NULL
 ),
+stm_all AS (
+  SELECT
+    stm.TICKET_ID,
+    DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) AS dt
+  FROM PROD_DB.PUBLIC.SERVICE_TICKET_MODEL stm
+  INNER JOIN csp_universe csp
+    ON csp.PARTNER_ID::INT = COALESCE(stm.CURRENT_PARTNER_ACCOUNT_ID::INT, stm.LCO_ACCOUNT_ID::INT)
+  WHERE stm.TICKET_ID IS NOT NULL
+    AND REGEXP_LIKE(stm.TICKET_ID, '^[0-9]+$')
+    AND (
+      stm.LAST_TITLE ILIKE 'Internet Issues|%' OR stm.LAST_TITLE ILIKE 'Internet Issues |%'
+      OR stm.LAST_TITLE ILIKE 'Others|Recharge expired (Service issue)%'
+      OR stm.LAST_TITLE ILIKE 'Others|TV/Camera issue%'
+      OR stm.LAST_TITLE ILIKE 'Others|Adapter issue%'
+      OR stm.LAST_TITLE ILIKE 'Shifting Request|Shift to New Address%'
+      OR stm.LAST_TITLE ILIKE 'Shifting Request|Shift Within My Home%'
+    )
+    AND DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) >= DATEADD('day', -31, CURRENT_DATE())
+    AND DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) < CURRENT_DATE()
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY stm.TICKET_ID ORDER BY stm.TICKET_ADDED_TIME DESC) = 1
+),
 stm_tickets AS (
   SELECT
     stm.TICKET_ID,
@@ -4379,6 +4400,9 @@ stm_tickets AS (
     AND DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) >= DATEADD('day', -31, CURRENT_DATE())
     AND DATE(DATEADD(MINUTE, 330, stm.TICKET_ADDED_TIME)) < CURRENT_DATE()
 ),
+daily_created AS (
+  SELECT dt, COUNT(*) AS tickets_created FROM stm_all GROUP BY dt
+),
 customer_mobile AS (
   SELECT ACCOUNT_ID, MOBILE FROM PROD_DB.PUBLIC.T_WG_CUSTOMER WHERE MOBILE IS NOT NULL
 ),
@@ -4392,24 +4416,26 @@ all_calls AS (
   FROM PROD_DB.POSTGRES_RDS_PARTNER_CALL_LOG_IVR.USER_CONNECTION_CALL_LOGS
   WHERE CREATED_AT >= DATEADD('day', -63, CURRENT_TIMESTAMP()) AND _FIVETRAN_DELETED = FALSE
   UNION ALL
-  SELECT CALL_ID, RIGHT(TO_NUMBER, 10), CREATED_AT
+  SELECT CALL_ID AS call_id, RIGHT(TO_NUMBER, 10) AS mobile, CREATED_AT AS call_time_ist
   FROM PROD_DB.POSTGRES_RDS_PARTNER_CALL_LOG_IVR.USER_CONNECTION_CALL_LOGS
   WHERE CREATED_AT >= DATEADD('day', -63, CURRENT_TIMESTAMP()) AND _FIVETRAN_DELETED = FALSE
   UNION ALL
-  SELECT ID::VARCHAR, RIGHT(FROM_NUMBER, 10), CREATED_AT
-  FROM PROD_DB.POSTGRES_RDS_PARTNER_SERVICE_DB_PUBLIC.CALL_LOG
-  WHERE CREATED_AT >= DATEADD('day', -63, CURRENT_TIMESTAMP()) AND _FIVETRAN_DELETED = FALSE
-  UNION ALL
-  SELECT ID::VARCHAR, RIGHT(TO_NUMBER, 10), CREATED_AT
-  FROM PROD_DB.POSTGRES_RDS_PARTNER_SERVICE_DB_PUBLIC.CALL_LOG
-  WHERE CREATED_AT >= DATEADD('day', -63, CURRENT_TIMESTAMP()) AND _FIVETRAN_DELETED = FALSE
+  SELECT ID::VARCHAR AS call_id, RIGHT(COUNTERPARTY_NUMBER_NORMALIZED, 10) AS mobile,
+         DATEADD(MINUTE, 330, START_TIME) AS call_time_ist
+  FROM PROD_DB.POSTGRES_RDS_PARTNER_CALL_LOG_IVR.DEVICE_CALL_LOG
+  WHERE START_TIME >= DATEADD('day', -63, CURRENT_TIMESTAMP())
+    AND _FIVETRAN_DELETED = FALSE
+    AND DIRECTION = 'INCOMING'
+    AND START_TIME IS NOT NULL
 ),
 calls_open_to_close AS (
   SELECT t.TICKET_ID, t.dt, COUNT(DISTINCT a.call_id) AS calls
   FROM stm_tickets t
   JOIN ticket_mobiles tm ON tm.TICKET_ID = t.TICKET_ID
   LEFT JOIN all_calls a
-    ON a.mobile = RIGHT(tm.mobile, 10) AND a.call_time_ist >= t.created_ist AND a.call_time_ist <= t.resolved_ist
+    ON a.mobile = RIGHT(tm.mobile, 10)
+    AND a.call_time_ist >= t.created_ist
+    AND a.call_time_ist <= t.resolved_ist
   GROUP BY t.TICKET_ID, t.dt
 ),
 calls_24h_after_close AS (
@@ -4417,14 +4443,16 @@ calls_24h_after_close AS (
   FROM stm_tickets t
   JOIN ticket_mobiles tm ON tm.TICKET_ID = t.TICKET_ID
   LEFT JOIN all_calls a
-    ON a.mobile = RIGHT(tm.mobile, 10) AND a.call_time_ist > t.resolved_ist AND a.call_time_ist <= DATEADD('hour', 24, t.resolved_ist)
+    ON a.mobile = RIGHT(tm.mobile, 10)
+    AND a.call_time_ist > t.resolved_ist
+    AND a.call_time_ist <= DATEADD('hour', 24, t.resolved_ist)
   GROUP BY t.TICKET_ID, t.dt
 ),
 daily_oc AS (
   SELECT dt,
-    COUNT(*) AS total_tickets,
+    COUNT(*) AS total_resolved,
     SUM(IFF(calls>0,1,0)) AS with_calls,
-    ROUND(100.0*with_calls/NULLIF(total_tickets,0),1) AS pct_with_calls,
+    ROUND(100.0*with_calls/NULLIF(total_resolved,0),1) AS pct_with_calls,
     ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY calls),2) AS p50,
     ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY calls),2) AS p75,
     ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY calls),2) AS p90
@@ -4440,17 +4468,16 @@ daily_24h AS (
   FROM calls_24h_after_close GROUP BY dt
 ),
 unpivoted AS (
-  SELECT dt, 1 AS s, 'Total Tickets (Resolved)' AS metric, total_tickets AS val FROM daily_oc
-  UNION ALL SELECT dt, 2, 'Tickets With Calls (open->close)', with_calls FROM daily_oc
-  UNION ALL SELECT dt, 3, '% With Calls (open->close)', pct_with_calls FROM daily_oc
-  UNION ALL SELECT dt, 4, 'P50 Calls (open->close)', p50 FROM daily_oc
-  UNION ALL SELECT dt, 5, 'P75 Calls (open->close)', p75 FROM daily_oc
-  UNION ALL SELECT dt, 6, 'P90 Calls (open->close)', p90 FROM daily_oc
-  UNION ALL SELECT dt, 7, 'Tickets With Calls (24h after close)', with_calls_24h FROM daily_24h
-  UNION ALL SELECT dt, 8, '% With Calls (24h after close)', pct_24h FROM daily_24h
-  UNION ALL SELECT dt, 9, 'P50 Calls (24h after close)', p50 FROM daily_24h
-  UNION ALL SELECT dt, 10, 'P75 Calls (24h after close)', p75 FROM daily_24h
-  UNION ALL SELECT dt, 11, 'P90 Calls (24h after close)', p90 FROM daily_24h
+  SELECT dt, 0 AS s, 'Total Tickets Created' AS metric, tickets_created::FLOAT AS val FROM daily_created
+  UNION ALL SELECT dt, 1, 'Total Tickets (Resolved)', total_resolved FROM daily_oc
+  UNION ALL SELECT dt, 2, 'Tickets With Calls (open-close)', with_calls FROM daily_oc
+  UNION ALL SELECT dt, 3, '% With Calls (open-close)', pct_with_calls FROM daily_oc
+  UNION ALL SELECT dt, 4, 'P50 Calls (open-close)', p50 FROM daily_oc
+  UNION ALL SELECT dt, 5, 'P90 Calls (open-close)', p90 FROM daily_oc
+  UNION ALL SELECT dt, 6, 'Tickets With Calls (24h after close)', with_calls_24h FROM daily_24h
+  UNION ALL SELECT dt, 7, '% With Calls (24h after close)', pct_24h FROM daily_24h
+  UNION ALL SELECT dt, 8, 'P50 Calls (24h after close)', p50 FROM daily_24h
+  UNION ALL SELECT dt, 9, 'P90 Calls (24h after close)', p90 FROM daily_24h
 )
 SELECT
   metric AS "Metric",
