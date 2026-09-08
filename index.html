@@ -319,7 +319,8 @@ function loadMetric(key, wfName, type) {
   const cols = isEarnings ? COLS_EARNINGS : (key.endsWith('_funnel') || key === 'b2i_health') ? COLS_FUNNEL : isRates ? COLS_RATES : COLS_HEALTH;
   const body = document.getElementById('mainBody');
   const stClickable = key === 'service_tickets_health' ? {
-    'Service Ticket (Kapture-SRS-TAS) Match Rate': 'st-detail-match',
+    'STM to Kapture Match Rate': 'st-detail-stm-kapture',
+    'Service Ticket (STM-SRS-TAS) Match Rate': 'st-detail-match',
     'Enrichment Rate': 'st-detail-enrichment',
     'Ticket Close Match % (SRS · TAS · Kapture)': 'st-detail-closure',
     'TAT Calculation Accuracy': 'st-detail-tat'
@@ -727,6 +728,7 @@ function loadMetric(key, wfName, type) {
   if (key === 'service_tickets_raw') {
     const RAW_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'];
     const rawSections = [
+      { key: 'st_stm_kapture_match', title: 'STM to Kapture Match Rate — Daily Breakdown', multi: false },
       { key: 'st_raw_match_rate',    title: 'Match Rate — by Ticket Type (Counts)',     multi: true, labelCols: ['Ticket Type','Metric'] },
       { key: 'st_raw_enrichment',    title: 'Enrichment — Field-Level Counts',          multi: false },
       { key: 'st_raw_closure',       title: 'Closure — Directional Counts',             multi: false },
@@ -770,9 +772,14 @@ function loadMetric(key, wfName, type) {
 
   if (key === 'service_tickets_health') {
     const DATA_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'];
+    const stmKapture = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['st_stm_kapture_match'] : null;
+    if (stmKapture && stmKapture.length > 0) {
+      html += '<div id="st-detail-stm-kapture" class="section-label" style="margin-top:36px">STM to Kapture Match Rate — Daily Breakdown</div>';
+      html += buildTableHtml(stmKapture, DATA_COLS, false);
+    }
     const matchRate = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['st_detail_match_rate'] : null;
     if (matchRate && matchRate.length > 0) {
-      html += '<div id="st-detail-match" class="section-label" style="margin-top:36px">Service Ticket (Kapture-SRS-TAS) Match Rate — by Ticket Type</div>';
+      html += '<div id="st-detail-match" class="section-label" style="margin-top:36px">Service Ticket (STM-SRS-TAS) Match Rate — by Ticket Type</div>';
       html += buildMultiLabelTableHtml(matchRate, ['Ticket Type','Metric'], DATA_COLS, true);
     }
     const enrichment = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['st_detail_enrichment'] : null;
@@ -1171,9 +1178,10 @@ function buildTableHtml(rows, cols, pct, clickable, redHighlight) {
       html += '<tr class="row-section"><td colspan="' + (cols.length + 1) + '">' + name.replace(/^-+\s*/, '') + '</td></tr>';
       continue;
     }
-    html += '<tr>';
+    const isBlue = name === 'STM to Kapture Match Rate';
+    html += '<tr' + (isBlue ? ' style="background:#e8f0fe"' : '') + '>';
     const anchor = clickable && clickable[name];
-    html += '<td>' + (anchor ? '<span class="metric-link" onclick="document.getElementById(\'' + anchor + '\').scrollIntoView({behavior:\'smooth\',block:\'start\'})">' + name + ' ↓</span>' : name) + '</td>';
+    html += '<td>' + (anchor ? '<span class="metric-link" ' + (isBlue ? 'style="color:#1a73e8" ' : '') + 'onclick="document.getElementById(\'' + anchor + '\').scrollIntoView({behavior:\'smooth\',block:\'start\'})">' + name + ' ↓</span>' : name) + '</td>';
     cols.forEach(c => {
       const v = row[c] ?? row[c.toUpperCase()] ?? '';
       const numV = parseFloat(v);

@@ -3326,6 +3326,53 @@ ORDER BY metric
 
 QUERIES["service_tickets_health"] = r"""
 SELECT * FROM (
+  -- 0. STM to Kapture Match Rate
+  WITH stm_t AS (
+    SELECT KAPTURE_TICKET_ID::VARCHAR AS tid,
+           DATE(DATEADD(MINUTE,330,TICKET_ADDED_TIME)) AS dt
+    FROM PROD_DB.PUBLIC.SERVICE_TICKET_MODEL
+    WHERE KAPTURE_TICKET_ID IS NOT NULL
+      AND REGEXP_LIKE(KAPTURE_TICKET_ID,'^[0-9]+$')
+      AND (LAST_TITLE ILIKE 'Internet Issues|%' OR LAST_TITLE ILIKE 'Internet Issues |%'
+           OR LAST_TITLE ILIKE 'Others|Recharge expired (Service issue)%'
+           OR LAST_TITLE ILIKE 'Others|TV/Camera issue%'
+           OR LAST_TITLE ILIKE 'Others|Adapter issue%'
+           OR LAST_TITLE ILIKE 'Shifting Request|Shift to New Address%'
+           OR LAST_TITLE ILIKE 'Shifting Request|Shift Within My Home%')
+      AND DATE(DATEADD(MINUTE,330,TICKET_ADDED_TIME)) >= DATEADD('day',-30,CURRENT_DATE())
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY KAPTURE_TICKET_ID ORDER BY TICKET_ADDED_TIME DESC)=1
+  ),
+  q AS (
+    SELECT DISTINCT TICKET_NO::VARCHAR AS tno
+    FROM PROD_DB.KAPTURE_QUEUE_EMAILS.CUSTOMER_QUEUE_REPORTING_60_DAYS_NEW
+    WHERE INGESTED_AT >= DATEADD('day',-45,CURRENT_TIMESTAMP())
+  ),
+  daily_stm AS (
+    SELECT s.dt,
+      ROUND(100.0*SUM(IFF(q.tno IS NOT NULL,1,0))/COUNT(*),1) AS val
+    FROM stm_t s LEFT JOIN q ON q.tno = s.tid
+    WHERE s.dt >= DATEADD('day',-30,CURRENT_DATE())
+    GROUP BY s.dt
+  )
+  SELECT
+    'STM to Kapture Match Rate'                                              AS "Metric",
+    MAX(CASE WHEN dt = DATEADD('day', -1, CURRENT_DATE()) THEN val END)      AS "T-1",
+    MAX(CASE WHEN dt = DATEADD('day', -2, CURRENT_DATE()) THEN val END)      AS "T-2",
+    MAX(CASE WHEN dt = DATEADD('day', -3, CURRENT_DATE()) THEN val END)      AS "T-3",
+    MAX(CASE WHEN dt = DATEADD('day', -4, CURRENT_DATE()) THEN val END)      AS "T-4",
+    MAX(CASE WHEN dt = DATEADD('day', -5, CURRENT_DATE()) THEN val END)      AS "T-5",
+    MAX(CASE WHEN dt = DATEADD('day', -6, CURRENT_DATE()) THEN val END)      AS "T-6",
+    MAX(CASE WHEN dt = DATEADD('day', -7, CURRENT_DATE()) THEN val END)      AS "T-7",
+    MAX(CASE WHEN dt = DATEADD('day', -8, CURRENT_DATE()) THEN val END)      AS "T-8",
+    ROUND(AVG(val), 1)                                                        AS "30D Avg",
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val), 1)               AS "30D Median",
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1)               AS "30D P90"
+  FROM daily_stm
+)
+
+UNION ALL
+
+SELECT * FROM (
   -- 1. Service Ticket (Kapture-SRS-TAS) Match Rate
   WITH migrated AS (
     SELECT DISTINCT ca.CSP_ID
@@ -3376,7 +3423,7 @@ SELECT * FROM (
     GROUP BY dt
   )
   SELECT
-    'Service Ticket (Kapture-SRS-TAS) Match Rate'                            AS "Metric",
+    'Service Ticket (STM-SRS-TAS) Match Rate'                                 AS "Metric",
     MAX(CASE WHEN dt = DATEADD('day', -1, CURRENT_DATE()) THEN val END)      AS "T-1",
     MAX(CASE WHEN dt = DATEADD('day', -2, CURRENT_DATE()) THEN val END)      AS "T-2",
     MAX(CASE WHEN dt = DATEADD('day', -3, CURRENT_DATE()) THEN val END)      AS "T-3",
@@ -4042,6 +4089,61 @@ SELECT category AS "Category", MAX(sla_rule) AS "Rule",
   ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY correct_pct), 1) AS "P90"
 FROM daily GROUP BY category
 ORDER BY CASE category WHEN 'NO_INTERNET' THEN 1 WHEN 'RECHARGE_DONE_NO_INTERNET' THEN 2 WHEN 'OPTICAL_POWER_OUT_OF_RANGE' THEN 3 WHEN 'FREQUENT_DISCONNECTION' THEN 4 WHEN 'SLOW_INTERNET' THEN 5 ELSE 6 END
+"""
+
+QUERIES["st_stm_kapture_match"] = r"""
+WITH stm_t AS (
+  SELECT KAPTURE_TICKET_ID::VARCHAR AS tid,
+         DATE(DATEADD(MINUTE,330,TICKET_ADDED_TIME)) AS dt
+  FROM PROD_DB.PUBLIC.SERVICE_TICKET_MODEL
+  WHERE KAPTURE_TICKET_ID IS NOT NULL
+    AND REGEXP_LIKE(KAPTURE_TICKET_ID,'^[0-9]+$')
+    AND (LAST_TITLE ILIKE 'Internet Issues|%' OR LAST_TITLE ILIKE 'Internet Issues |%'
+         OR LAST_TITLE ILIKE 'Others|Recharge expired (Service issue)%'
+         OR LAST_TITLE ILIKE 'Others|TV/Camera issue%'
+         OR LAST_TITLE ILIKE 'Others|Adapter issue%'
+         OR LAST_TITLE ILIKE 'Shifting Request|Shift to New Address%'
+         OR LAST_TITLE ILIKE 'Shifting Request|Shift Within My Home%')
+    AND DATE(DATEADD(MINUTE,330,TICKET_ADDED_TIME)) >= DATEADD('day',-38,CURRENT_DATE())
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY KAPTURE_TICKET_ID ORDER BY TICKET_ADDED_TIME DESC)=1
+),
+q AS (
+  SELECT DISTINCT TICKET_NO::VARCHAR AS tno
+  FROM PROD_DB.KAPTURE_QUEUE_EMAILS.CUSTOMER_QUEUE_REPORTING_60_DAYS_NEW
+  WHERE INGESTED_AT >= DATEADD('day',-45,CURRENT_TIMESTAMP())
+),
+daily AS (
+  SELECT s.dt,
+    COUNT(*) AS stm_tickets,
+    SUM(IFF(q.tno IS NOT NULL,1,0)) AS in_queue,
+    SUM(IFF(q.tno IS NULL,1,0)) AS missing,
+    ROUND(100.0*SUM(IFF(q.tno IS NOT NULL,1,0))/COUNT(*),1) AS match_pct
+  FROM stm_t s LEFT JOIN q ON q.tno = s.tid
+  WHERE s.dt >= DATEADD('day',-30,CURRENT_DATE())
+  GROUP BY s.dt
+),
+metrics AS (
+  SELECT 1 AS sort_order, 'STM Tickets' AS metric, dt, stm_tickets AS val FROM daily
+  UNION ALL SELECT 2, 'In Queue', dt, in_queue FROM daily
+  UNION ALL SELECT 3, 'Missing', dt, missing FROM daily
+  UNION ALL SELECT 4, 'Match %', dt, match_pct FROM daily
+)
+SELECT
+  metric AS "Metric",
+  MAX(CASE WHEN dt = DATEADD('day',-1,CURRENT_DATE()) THEN val END) AS "T-1",
+  MAX(CASE WHEN dt = DATEADD('day',-2,CURRENT_DATE()) THEN val END) AS "T-2",
+  MAX(CASE WHEN dt = DATEADD('day',-3,CURRENT_DATE()) THEN val END) AS "T-3",
+  MAX(CASE WHEN dt = DATEADD('day',-4,CURRENT_DATE()) THEN val END) AS "T-4",
+  MAX(CASE WHEN dt = DATEADD('day',-5,CURRENT_DATE()) THEN val END) AS "T-5",
+  MAX(CASE WHEN dt = DATEADD('day',-6,CURRENT_DATE()) THEN val END) AS "T-6",
+  MAX(CASE WHEN dt = DATEADD('day',-7,CURRENT_DATE()) THEN val END) AS "T-7",
+  MAX(CASE WHEN dt = DATEADD('day',-8,CURRENT_DATE()) THEN val END) AS "T-8",
+  ROUND(AVG(val), 1) AS "30D Avg",
+  ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val), 1) AS "30D Median",
+  ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1) AS "30D P90"
+FROM metrics
+GROUP BY metric, sort_order
+ORDER BY sort_order
 """
 
 QUERIES["st_raw_match_rate"] = r"""
