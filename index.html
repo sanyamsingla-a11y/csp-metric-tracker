@@ -318,6 +318,16 @@ function loadMetric(key, wfName, type) {
   const isRates = (key.endsWith('_efficiency') && key !== 'pickup_tickets_efficiency') || key.endsWith('_health_rates') || (isEarnings && !isEarningsRaw) || key === 'device_ordering_health' || key === 'service_tickets_health' || key === 'pickup_tickets_health';
   const cols = isEarnings ? COLS_EARNINGS : (key.endsWith('_funnel') || key === 'b2i_health') ? COLS_FUNNEL : isRates ? COLS_RATES : COLS_HEALTH;
   const body = document.getElementById('mainBody');
+  const stHealthNewMetrics = [
+    'STM to Kapture Match Rate',
+    'Service Ticket- PN Sent Rate (%)',
+    'Service Ticket- PN Delivery Rate (%)',
+    'Ticket Creation- Chat Trigger %',
+    'Ticket Resolve- Chat Trigger %',
+    'Technician Assigned - Chat triggered %',
+    'STM to TAS Closure Rate',
+    'CX called Wiom- CSP updated %',
+  ];
   const stClickable = key === 'service_tickets_health' ? {
     'STM to Kapture Match Rate': 'st-detail-stm-kapture',
     'Service Ticket- PN Sent Rate (%)': 'st-detail-pn-sent-delivered',
@@ -325,9 +335,20 @@ function loadMetric(key, wfName, type) {
     'Ticket Creation- Chat Trigger %': 'st-detail-chat-creation',
     'Ticket Resolve- Chat Trigger %': 'st-detail-chat-resolution',
   } : null;
+  const stRawClickable = {
+    'Service Ticket (STM-SRS-TAS) Match Rate': 'st-detail-match-rate',
+    'Enrichment Rate': 'st-detail-enrichment',
+    'Ticket Close Match % (SRS · TAS · STM)': 'st-detail-closure',
+    'TAT Calculation Accuracy': 'st-detail-tat-accuracy',
+    'Shifting Tickets Address Fill Rate': 'st-detail-shifting-address',
+    'Reopen Ticket (SRS-TAS) Match Rate': 'st-detail-reopen',
+  };
   let html = '';
   if (key === 'pickup_tickets_efficiency' && rows && rows.length > 0) {
     html = '<div class="section-label">PUT Closure TAT</div>' + buildTableHtml(rows, cols, false);
+  } else if (key === 'service_tickets_health' && rows && rows.length > 0) {
+    const healthRows = rows.filter(r => stHealthNewMetrics.includes(r['Metric'] || r['metric'] || r['METRIC']));
+    html = buildTableHtml(healthRows, cols, isRates, stClickable, isHealthView);
   } else if (rows && rows.length > 0) {
     html = buildTableHtml(rows, cols, isRates, stClickable, isHealthView);
   }
@@ -778,6 +799,15 @@ function loadMetric(key, wfName, type) {
   }
 
   if (key === 'service_tickets_raw') {
+    // Show old health metrics at top of raw with clickable links to detail sections
+    const healthData = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['service_tickets_health'] : null;
+    if (healthData && healthData.length > 0) {
+      const oldMetrics = healthData.filter(r => !stHealthNewMetrics.includes(r['Metric'] || r['metric'] || r['METRIC']));
+      if (oldMetrics.length > 0) {
+        html += '<div class="section-label">Health Summary</div>';
+        html += buildTableHtml(oldMetrics, COLS_RATES, true, stRawClickable, true);
+      }
+    }
     const RAW_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'];
     const rawSections = [
       { key: 'st_stm_kapture_match', title: 'STM to Kapture Match Rate — Daily Breakdown', multi: false },
@@ -785,12 +815,12 @@ function loadMetric(key, wfName, type) {
       { key: 'st_raw_enrichment',    title: 'Enrichment — Field-Level Counts',          multi: false },
       { key: 'st_raw_closure',       title: 'Closure — Directional Counts',             multi: false },
       { key: 'st_raw_pn_delivery',   title: 'PN Delivery — Tickets vs CSP PN Delivered', multi: false, cols: COLS_HEALTH },
-      { key: 'st_raw_shifting_address', title: 'Shifting Address — Counts',             multi: false },
-      { key: 'st_raw_reopen',        title: 'Reopen — SRS Reopened vs TAS Within 1hr',  multi: false },
-      { key: 'st_detail_match_rate',  title: 'Service Ticket (STM-SRS-TAS) Match Rate — by Ticket Type', multi: true, labelCols: ['Ticket Type','Metric'] },
-      { key: 'st_detail_enrichment',  title: 'Enrichment Rate — Field-Level Breakdown',  multi: false },
-      { key: 'st_detail_closure',     title: 'Ticket Closure Match Rate — Directional Breakdown', multi: false },
-      { key: 'st_detail_tat_accuracy', title: 'TAT Calculation Accuracy — by Category',  multi: true, labelCols: ['Category','Rule'] },
+      { key: 'st_raw_shifting_address', title: 'Shifting Address — Counts',             multi: false, id: 'st-detail-shifting-address' },
+      { key: 'st_raw_reopen',        title: 'Reopen — SRS Reopened vs TAS Within 1hr',  multi: false, id: 'st-detail-reopen' },
+      { key: 'st_detail_match_rate',  title: 'Service Ticket (STM-SRS-TAS) Match Rate — by Ticket Type', multi: true, labelCols: ['Ticket Type','Metric'], id: 'st-detail-match-rate' },
+      { key: 'st_detail_enrichment',  title: 'Enrichment Rate — Field-Level Breakdown',  multi: false, id: 'st-detail-enrichment' },
+      { key: 'st_detail_closure',     title: 'Ticket Closure Match Rate — Directional Breakdown', multi: false, id: 'st-detail-closure' },
+      { key: 'st_detail_tat_accuracy', title: 'TAT Calculation Accuracy — by Category',  multi: true, labelCols: ['Category','Rule'], id: 'st-detail-tat-accuracy' },
       { key: 'st_raw_pn_sent_delivered', title: 'PN Sent & Delivery Rate — Daily Breakdown', multi: false },
       { key: 'st_raw_chat_creation',     title: 'Chat Triggered on Ticket Creation — Daily', multi: false },
       { key: 'st_raw_chat_resolution',   title: 'Chat Triggered on Ticket Resolution — Daily', multi: false },
@@ -798,8 +828,8 @@ function loadMetric(key, wfName, type) {
     rawSections.forEach((sec, i) => {
       const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[sec.key] : null;
       if (d && d.length > 0) {
-        const mt = i === 0 ? '' : ' style="margin-top:36px"';
-        html += '<div class="section-label"' + mt + '>' + sec.title + '</div>';
+        const idAttr = sec.id ? ' id="' + sec.id + '"' : '';
+        html += '<div class="section-label"' + idAttr + ' style="margin-top:36px">' + sec.title + '</div>';
         const c = sec.cols || RAW_COLS;
         html += sec.multi ? buildMultiLabelTableHtml(d, sec.labelCols, c, false) : buildTableHtml(d, c, false);
       }
