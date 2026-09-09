@@ -322,7 +322,7 @@ function loadMetric(key, wfName, type) {
     'STM to Kapture Match Rate': 'st-detail-stm-kapture',
     'Service Ticket (STM-SRS-TAS) Match Rate': 'st-detail-match',
     'Enrichment Rate': 'st-detail-enrichment',
-    'Ticket Close Match % (SRS · TAS · Kapture)': 'st-detail-closure',
+    'Ticket Close Match % (SRS · TAS · STM)': 'st-detail-closure',
     'TAT Calculation Accuracy': 'st-detail-tat'
   } : null;
   let html = '';
@@ -398,7 +398,7 @@ function loadMetric(key, wfName, type) {
       html += '<p style="margin:-4px 0 8px 0;font-size:13px"><a href="https://metabase.wiom.in/question/11915-carry-fee-ptl-view?csp_id=&csp_name=&region=&device_id=" target="_blank" style="color:#6366f1;text-decoration:none">Carry Fee PTL View ↗</a></p>';
       const cfSkip = ['date','DATE','cadence','CADENCE','gap_reason','GAP_REASON'];
       const cfCols = Object.keys(cfDaily[0]).filter(k => !cfSkip.includes(k));
-      html += '<div class="table-wrap"><table><thead><tr>';
+      html += '<div class="table-wrap" style="max-height:420px;overflow-y:auto"><table style="position:relative"><thead style="position:sticky;top:0;z-index:1"><tr>';
       html += '<th>Date</th><th>Cadence</th>';
       cfCols.forEach(c => { html += '<th>' + c.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase()) + '</th>'; });
       html += '<th>Gap Reason</th>';
@@ -704,7 +704,7 @@ function loadMetric(key, wfName, type) {
       html += '<div class="section-label" style="margin-top:36px">Earnings at CSP and Connection Level</div>';
       html += buildTableHtml(cspConnRows, EARN_MOM_COLS, false, null, false);
     }
-    // Carry Fee Cohort State Tracker
+    // Carry Fee Cohort State Tracker — with dropdown filter
     const cfTracker = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['earnings_carry_fee_tracker'] : null;
     if (cfTracker && cfTracker.length > 0) {
       html += '<div class="section-label" style="margin-top:36px">Carry Fee — Cohort State Tracker</div>';
@@ -717,29 +717,45 @@ function loadMetric(key, wfName, type) {
         if (!cohorts[cd]) cohorts[cd] = [];
         cohorts[cd].push(r);
       });
-      Object.keys(cohorts).sort().forEach(cd => {
-        const rows = cohorts[cd];
-        const cdParts = cd.toString().slice(0,10).split('-');
-        const cdFmt = cdParts.length === 3 ? cdParts[2]+'-'+cdParts[1]+'-'+cdParts[0] : cd;
-        html += '<div style="margin-top:18px;font-weight:600;font-size:14px;color:var(--text-primary,#1e293b)">Cohort: ' + cdFmt + '</div>';
-        html += '<div class="table-wrap"><table><thead><tr>';
-        html += '<th>Region</th><th>State</th>';
-        CF_DAY_COLS.forEach(c => { html += '<th>' + c + '</th>'; });
-        html += '<th>Cohort Size</th>';
-        html += '</tr></thead><tbody>';
-        rows.forEach(row => {
-          const region = row.region || row.REGION || '';
-          const state = row.state || row.STATE || '';
-          html += '<tr><td>' + region + '</td><td>' + state + '</td>';
-          CF_DAY_COLS.forEach(c => {
-            const v = row[c];
-            html += '<td>' + (v != null && v !== 0 ? v : (v === 0 ? '0' : '—')) + '</td>';
-          });
-          const cs = row.cohort_size || row.COHORT_SIZE || '';
-          html += '<td>' + cs + '</td></tr>';
-        });
-        html += '</tbody></table></div>';
+      const cohortKeys = Object.keys(cohorts).sort().reverse();
+      // Dropdown
+      html += '<div style="margin:12px 0"><label style="font-weight:600;font-size:13px;margin-right:8px">Cohort:</label>';
+      html += '<select id="cf-cohort-select" onchange="window._renderCfCohort()" style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;background:#fff">';
+      cohortKeys.forEach(cd => {
+        const p = cd.toString().slice(0,10).split('-');
+        const label = p.length === 3 ? p[2]+'-'+p[1]+'-'+p[0] : cd;
+        html += '<option value="' + cd + '">' + label + '</option>';
       });
+      html += '</select></div>';
+      html += '<div id="cf-cohort-table"></div>';
+      // Store data and render function globally
+      html += '<script>';
+      html += 'window._cfCohorts = ' + JSON.stringify(cohorts) + ';';
+      html += 'window._cfDayCols = ' + JSON.stringify(CF_DAY_COLS) + ';';
+      html += 'window._renderCfCohort = function() {';
+      html += '  var sel = document.getElementById("cf-cohort-select");';
+      html += '  var cd = sel.value;';
+      html += '  var rows = window._cfCohorts[cd] || [];';
+      html += '  var cols = window._cfDayCols;';
+      html += '  var h = "<div class=\\"table-wrap\\"><table><thead><tr><th>Region</th><th>State</th>";';
+      html += '  cols.forEach(function(c){ h += "<th>" + c + "</th>"; });';
+      html += '  h += "<th>Cohort Size</th></tr></thead><tbody>";';
+      html += '  rows.forEach(function(row){';
+      html += '    var region = row.region || row.REGION || "";';
+      html += '    var state = row.state || row.STATE || "";';
+      html += '    h += "<tr><td>" + region + "</td><td>" + state + "</td>";';
+      html += '    cols.forEach(function(c){';
+      html += '      var v = row[c];';
+      html += '      h += "<td>" + (v != null && v !== 0 ? v : (v === 0 ? "0" : "—")) + "</td>";';
+      html += '    });';
+      html += '    var cs = row.cohort_size || row.COHORT_SIZE || "";';
+      html += '    h += "<td>" + cs + "</td></tr>";';
+      html += '  });';
+      html += '  h += "</tbody></table></div>";';
+      html += '  document.getElementById("cf-cohort-table").innerHTML = h;';
+      html += '};';
+      html += 'setTimeout(window._renderCfCohort, 0);';
+      html += '<\/script>';
     }
     if (!html) {
       html = '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';

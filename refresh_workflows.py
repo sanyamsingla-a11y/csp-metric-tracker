@@ -3552,7 +3552,7 @@ SELECT * FROM (
     FROM daily
   )
   SELECT
-    'Ticket Close Match % (SRS · TAS · Kapture)'                                   AS "Metric",
+    'Ticket Close Match % (SRS · TAS · STM)'                                        AS "Metric",
     MAX(CASE WHEN dt = DATEADD('day',-1,CURRENT_DATE()) THEN overall_match_pct END) AS "T-1",
     MAX(CASE WHEN dt = DATEADD('day',-2,CURRENT_DATE()) THEN overall_match_pct END) AS "T-2",
     MAX(CASE WHEN dt = DATEADD('day',-3,CURRENT_DATE()) THEN overall_match_pct END) AS "T-3",
@@ -4124,7 +4124,7 @@ daily AS (
 ),
 metrics AS (
   SELECT 1 AS sort_order, 'STM Tickets' AS metric, dt, stm_tickets AS val FROM daily
-  UNION ALL SELECT 2, 'In Queue', dt, in_queue FROM daily
+  UNION ALL SELECT 2, 'Kapture Tickets', dt, in_queue FROM daily
   UNION ALL SELECT 3, 'Missing', dt, missing FROM daily
   UNION ALL SELECT 4, 'Match %', dt, match_pct FROM daily
 )
