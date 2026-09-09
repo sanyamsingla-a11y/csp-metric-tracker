@@ -3991,16 +3991,8 @@ SELECT 'Technician Assigned - Chat triggered %' AS "Metric",
 
 UNION ALL
 
--- Placeholder: STM to TAS Closure Rate
-SELECT 'STM to TAS Closure Rate' AS "Metric",
-  NULL AS "T-1", NULL AS "T-2", NULL AS "T-3", NULL AS "T-4",
-  NULL AS "T-5", NULL AS "T-6", NULL AS "T-7", NULL AS "T-8",
-  NULL AS "30D Avg", NULL AS "30D Median", NULL AS "30D P90"
-
-UNION ALL
-
--- Placeholder: CX called Wiom- CSP updated %
-SELECT 'CX called Wiom- CSP updated %' AS "Metric",
+-- Placeholder: CX called Wiom- is CSP updated?
+SELECT 'CX called Wiom- is CSP updated?' AS "Metric",
   NULL AS "T-1", NULL AS "T-2", NULL AS "T-3", NULL AS "T-4",
   NULL AS "T-5", NULL AS "T-6", NULL AS "T-7", NULL AS "T-8",
   NULL AS "30D Avg", NULL AS "30D Median", NULL AS "30D P90"
