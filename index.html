@@ -347,8 +347,8 @@ function loadMetric(key, wfName, type) {
   if (key === 'pickup_tickets_efficiency' && rows && rows.length > 0) {
     html = '<div class="section-label">PUT Closure TAT</div>' + buildTableHtml(rows, cols, false);
   } else if (key === 'service_tickets_health' && rows && rows.length > 0) {
-    const healthRows = rows.filter(r => stHealthNewMetrics.includes(r['Metric'] || r['metric'] || r['METRIC']));
-    html = buildTableHtml(healthRows, cols, isRates, stClickable, isHealthView);
+    const allClickable = Object.assign({}, stClickable, stRawClickable);
+    html = buildTableHtml(rows, cols, isRates, allClickable, isHealthView);
   } else if (rows && rows.length > 0) {
     html = buildTableHtml(rows, cols, isRates, stClickable, isHealthView);
   }
