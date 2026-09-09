@@ -328,46 +328,26 @@ function loadMetric(key, wfName, type) {
     'STM to TAS Closure Rate',
     'CX called Wiom- CSP updated %',
   ];
-  const stClickable = key === 'service_tickets_health' ? {
+  const stAllClickable = {
     'STM to Kapture Match Rate': 'st-detail-stm-kapture',
-    'Service Ticket- PN Sent Rate (%)': 'st-detail-pn-sent-delivered',
-    'Service Ticket- PN Delivery Rate (%)': 'st-detail-pn-sent-delivered',
-    'Ticket Creation- Chat Trigger %': 'st-detail-chat-creation',
-    'Ticket Resolve- Chat Trigger %': 'st-detail-chat-resolution',
-  } : null;
-  const stRawClickable = {
     'Service Ticket (STM-SRS-TAS) Match Rate': 'st-detail-match-rate',
     'Enrichment Rate': 'st-detail-enrichment',
     'Ticket Close Match % (SRS · TAS · STM)': 'st-detail-closure',
     'TAT Calculation Accuracy': 'st-detail-tat-accuracy',
     'Shifting Tickets Address Fill Rate': 'st-detail-shifting-address',
     'Reopen Ticket (SRS-TAS) Match Rate': 'st-detail-reopen',
+    'Service Ticket- PN Sent Rate (%)': 'st-detail-pn-sent-delivered',
+    'Service Ticket- PN Delivery Rate (%)': 'st-detail-pn-sent-delivered',
+    'Ticket Creation- Chat Trigger %': 'st-detail-chat-creation',
+    'Ticket Resolve- Chat Trigger %': 'st-detail-chat-resolution',
   };
   let html = '';
   if (key === 'pickup_tickets_efficiency' && rows && rows.length > 0) {
     html = '<div class="section-label">PUT Closure TAT</div>' + buildTableHtml(rows, cols, false);
   } else if (key === 'service_tickets_health' && rows && rows.length > 0) {
-    const allClickable = Object.assign({}, stClickable, stRawClickable);
-    html = buildTableHtml(rows, cols, isRates, allClickable, isHealthView);
+    html = buildTableHtml(rows, cols, isRates, stAllClickable, isHealthView);
   } else if (rows && rows.length > 0) {
-    html = buildTableHtml(rows, cols, isRates, stClickable, isHealthView);
-  }
-
-  if (key === 'service_tickets_health') {
-    const ST_DETAIL_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','30D Avg','30D Median','30D P90'];
-    const stDetailSections = [
-      { key: 'st_stm_kapture_match',       id: 'st-detail-stm-kapture',       title: 'STM to Kapture Match Rate — Daily Breakdown' },
-      { key: 'st_raw_pn_sent_delivered',    id: 'st-detail-pn-sent-delivered', title: 'PN Sent & Delivery Rate — Daily Breakdown' },
-      { key: 'st_raw_chat_creation',        id: 'st-detail-chat-creation',     title: 'Chat Triggered on Ticket Creation — Daily Breakdown' },
-      { key: 'st_raw_chat_resolution',      id: 'st-detail-chat-resolution',   title: 'Chat Triggered on Ticket Resolution — Daily Breakdown' },
-    ];
-    stDetailSections.forEach(sec => {
-      const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[sec.key] : null;
-      if (d && d.length > 0) {
-        html += '<div id="' + sec.id + '" class="section-label" style="margin-top:36px">' + sec.title + '</div>';
-        html += buildTableHtml(d, ST_DETAIL_COLS, false);
-      }
-    });
+    html = buildTableHtml(rows, cols, isRates, null, isHealthView);
   }
 
   if (key === 'earnings_raw') {
@@ -810,7 +790,7 @@ function loadMetric(key, wfName, type) {
     }
     const RAW_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'];
     const rawSections = [
-      { key: 'st_stm_kapture_match', title: 'STM to Kapture Match Rate — Daily Breakdown', multi: false },
+      { key: 'st_stm_kapture_match', title: 'STM to Kapture Match Rate — Daily Breakdown', multi: false, id: 'st-detail-stm-kapture' },
       { key: 'st_raw_match_rate',    title: 'Match Rate — by Ticket Type (Counts)',     multi: true, labelCols: ['Ticket Type','Metric'] },
       { key: 'st_raw_enrichment',    title: 'Enrichment — Field-Level Counts',          multi: false },
       { key: 'st_raw_closure',       title: 'Closure — Directional Counts',             multi: false },
@@ -821,9 +801,9 @@ function loadMetric(key, wfName, type) {
       { key: 'st_detail_enrichment',  title: 'Enrichment Rate — Field-Level Breakdown',  multi: false, id: 'st-detail-enrichment' },
       { key: 'st_detail_closure',     title: 'Ticket Closure Match Rate — Directional Breakdown', multi: false, id: 'st-detail-closure' },
       { key: 'st_detail_tat_accuracy', title: 'TAT Calculation Accuracy — by Category',  multi: true, labelCols: ['Category','Rule'], id: 'st-detail-tat-accuracy' },
-      { key: 'st_raw_pn_sent_delivered', title: 'PN Sent & Delivery Rate — Daily Breakdown', multi: false },
-      { key: 'st_raw_chat_creation',     title: 'Chat Triggered on Ticket Creation — Daily', multi: false },
-      { key: 'st_raw_chat_resolution',   title: 'Chat Triggered on Ticket Resolution — Daily', multi: false },
+      { key: 'st_raw_pn_sent_delivered', title: 'PN Sent & Delivery Rate — Daily Breakdown', multi: false, id: 'st-detail-pn-sent-delivered' },
+      { key: 'st_raw_chat_creation',     title: 'Chat Triggered on Ticket Creation — Daily', multi: false, id: 'st-detail-chat-creation' },
+      { key: 'st_raw_chat_resolution',   title: 'Chat Triggered on Ticket Resolution — Daily', multi: false, id: 'st-detail-chat-resolution' },
     ];
     rawSections.forEach((sec, i) => {
       const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[sec.key] : null;
@@ -1243,7 +1223,7 @@ function buildTableHtml(rows, cols, pct, clickable, redHighlight) {
     const isBlue = name === 'STM to Kapture Match Rate';
     html += '<tr' + (isBlue ? ' style="background:#e8f0fe"' : '') + '>';
     const anchor = clickable && clickable[name];
-    html += '<td>' + (anchor ? '<span class="metric-link" ' + (isBlue ? 'style="color:#1a73e8" ' : '') + 'onclick="document.getElementById(\'' + anchor + '\').scrollIntoView({behavior:\'smooth\',block:\'start\'})">' + name + ' ↓</span>' : name) + '</td>';
+    html += '<td>' + (anchor ? '<span class="metric-link" ' + (isBlue ? 'style="color:#1a73e8" ' : '') + 'onclick="loadMetric(\'service_tickets_raw\',\'Service Tickets\',\'Raw\');setTimeout(function(){var el=document.getElementById(\'' + anchor + '\');if(el)el.scrollIntoView({behavior:\'smooth\',block:\'start\'});},100)">' + name + ' ↓</span>' : name) + '</td>';
     cols.forEach(c => {
       const v = row[c] ?? row[c.toUpperCase()] ?? '';
       const numV = parseFloat(v);
