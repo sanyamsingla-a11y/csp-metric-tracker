@@ -3835,6 +3835,238 @@ SELECT * FROM (
   FROM daily
 )
 
+UNION ALL
+
+-- PN Sent Rate
+SELECT * FROM (
+  WITH complaints AS (
+    SELECT COMPLAINT_ID,
+      TO_DATE(CONVERT_TIMEZONE('Asia/Kolkata', CREATED_AT)) AS d
+    FROM PROD_DB.CSP_SUPPORT_RESOLUTION_SERVICE_CSP_SUPPORT_RESOLUTION_SERVICE.COMPLAINTS
+    WHERE _FIVETRAN_ACTIVE = TRUE AND TICKET_ID NOT LIKE 'prod-test%'
+      AND STATUS <> 'REDIRECTED'
+      AND CREATED_AT >= DATEADD('day',-38,CURRENT_TIMESTAMP())
+  ),
+  tickets AS (SELECT d, COUNT(*) AS cnt FROM complaints GROUP BY d),
+  pn_sent_exec AS (
+    SELECT DISTINCT PARSE_JSON(properties):execution_id::STRING AS exec_id
+    FROM PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA
+    WHERE event_name = 'restore_task_created'
+      AND TIMESTAMP >= DATEADD('day',-45,CURRENT_TIMESTAMP())
+  ),
+  sent_complaints AS (
+    SELECT DISTINCT c.COMPLAINT_ID, c.d
+    FROM pn_sent_exec ps
+    JOIN PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RESTORE_EXECUTION_CANDIDATES rec
+      ON ps.exec_id = rec.EXECUTION_CANDIDATE_ID
+    JOIN complaints c ON rec.COMPLAINT_ID = c.COMPLAINT_ID
+  ),
+  pn_sent AS (SELECT d, COUNT(DISTINCT COMPLAINT_ID) AS cnt FROM sent_complaints GROUP BY d),
+  daily_pn AS (
+    SELECT t.d AS dt, ROUND(100.0*COALESCE(s.cnt,0)/NULLIF(t.cnt,0),1) AS val
+    FROM tickets t LEFT JOIN pn_sent s ON s.d = t.d
+    WHERE t.d >= DATEADD('day',-30,CURRENT_DATE())
+  )
+  SELECT
+    'Service Ticket- PN Sent Rate (%)'                                          AS "Metric",
+    MAX(CASE WHEN dt = DATEADD(DAY, -1, CURRENT_DATE()) THEN val END)          AS "T-1",
+    MAX(CASE WHEN dt = DATEADD(DAY, -2, CURRENT_DATE()) THEN val END)          AS "T-2",
+    MAX(CASE WHEN dt = DATEADD(DAY, -3, CURRENT_DATE()) THEN val END)          AS "T-3",
+    MAX(CASE WHEN dt = DATEADD(DAY, -4, CURRENT_DATE()) THEN val END)          AS "T-4",
+    MAX(CASE WHEN dt = DATEADD(DAY, -5, CURRENT_DATE()) THEN val END)          AS "T-5",
+    MAX(CASE WHEN dt = DATEADD(DAY, -6, CURRENT_DATE()) THEN val END)          AS "T-6",
+    MAX(CASE WHEN dt = DATEADD(DAY, -7, CURRENT_DATE()) THEN val END)          AS "T-7",
+    MAX(CASE WHEN dt = DATEADD(DAY, -8, CURRENT_DATE()) THEN val END)          AS "T-8",
+    ROUND(AVG(val), 1)                                                          AS "30D Avg",
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val), 1)                 AS "30D Median",
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1)                 AS "30D P90"
+  FROM daily_pn
+)
+
+UNION ALL
+
+-- PN Delivery Rate
+SELECT * FROM (
+  WITH complaints AS (
+    SELECT COMPLAINT_ID,
+      TO_DATE(CONVERT_TIMEZONE('Asia/Kolkata', CREATED_AT)) AS d
+    FROM PROD_DB.CSP_SUPPORT_RESOLUTION_SERVICE_CSP_SUPPORT_RESOLUTION_SERVICE.COMPLAINTS
+    WHERE _FIVETRAN_ACTIVE = TRUE AND TICKET_ID NOT LIKE 'prod-test%'
+      AND STATUS <> 'REDIRECTED'
+      AND CREATED_AT >= DATEADD('day',-38,CURRENT_TIMESTAMP())
+  ),
+  pn_sent_exec AS (
+    SELECT DISTINCT PARSE_JSON(properties):execution_id::STRING AS exec_id
+    FROM PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA
+    WHERE event_name = 'restore_task_created'
+      AND TIMESTAMP >= DATEADD('day',-45,CURRENT_TIMESTAMP())
+  ),
+  sent_complaints AS (
+    SELECT DISTINCT c.COMPLAINT_ID, c.d, ps.exec_id
+    FROM pn_sent_exec ps
+    JOIN PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RESTORE_EXECUTION_CANDIDATES rec
+      ON ps.exec_id = rec.EXECUTION_CANDIDATE_ID
+    JOIN complaints c ON rec.COMPLAINT_ID = c.COMPLAINT_ID
+  ),
+  pn_del_exec AS (
+    SELECT DISTINCT PARSE_JSON(properties):execution_id::STRING AS exec_id
+    FROM PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA
+    WHERE event_name = 'pn_delivered'
+      AND TIMESTAMP >= DATEADD('day',-45,CURRENT_TIMESTAMP())
+      AND (SPLIT_PART(PARSE_JSON(properties):wzrk_id::STRING, '_', 1) IN ('1778236503', '1786004220')
+           OR PARSE_JSON(properties):pn_type::STRING = 'ES_RESTORE_CANDIDATE_CREATED')
+  ),
+  delivered_complaints AS (
+    SELECT DISTINCT sc.COMPLAINT_ID, sc.d
+    FROM sent_complaints sc
+    JOIN pn_del_exec pd ON pd.exec_id = sc.exec_id
+  ),
+  pn_del AS (SELECT d, COUNT(DISTINCT COMPLAINT_ID) AS cnt FROM delivered_complaints GROUP BY d),
+  pn_sent_cnt AS (SELECT d, COUNT(DISTINCT COMPLAINT_ID) AS cnt FROM sent_complaints GROUP BY d),
+  daily_del AS (
+    SELECT s.d AS dt, ROUND(100.0*COALESCE(dl.cnt,0)/NULLIF(s.cnt,0),1) AS val
+    FROM pn_sent_cnt s LEFT JOIN pn_del dl ON dl.d = s.d
+    WHERE s.d >= DATEADD('day',-30,CURRENT_DATE())
+  )
+  SELECT
+    'Service Ticket- PN Delivery Rate (%)'                                      AS "Metric",
+    MAX(CASE WHEN dt = DATEADD(DAY, -1, CURRENT_DATE()) THEN val END)          AS "T-1",
+    MAX(CASE WHEN dt = DATEADD(DAY, -2, CURRENT_DATE()) THEN val END)          AS "T-2",
+    MAX(CASE WHEN dt = DATEADD(DAY, -3, CURRENT_DATE()) THEN val END)          AS "T-3",
+    MAX(CASE WHEN dt = DATEADD(DAY, -4, CURRENT_DATE()) THEN val END)          AS "T-4",
+    MAX(CASE WHEN dt = DATEADD(DAY, -5, CURRENT_DATE()) THEN val END)          AS "T-5",
+    MAX(CASE WHEN dt = DATEADD(DAY, -6, CURRENT_DATE()) THEN val END)          AS "T-6",
+    MAX(CASE WHEN dt = DATEADD(DAY, -7, CURRENT_DATE()) THEN val END)          AS "T-7",
+    MAX(CASE WHEN dt = DATEADD(DAY, -8, CURRENT_DATE()) THEN val END)          AS "T-8",
+    ROUND(AVG(val), 1)                                                          AS "30D Avg",
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val), 1)                 AS "30D Median",
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1)                 AS "30D P90"
+  FROM daily_del
+)
+
+UNION ALL
+
+-- Chat triggered on Ticket Creation %
+SELECT * FROM (
+  WITH stm_t AS (
+    SELECT TICKET_ID::VARCHAR AS tid,
+      DATE(DATEADD(MINUTE, 330, TICKET_ADDED_TIME)) AS dt
+    FROM PROD_DB.PUBLIC.SERVICE_TICKET_MODEL
+    WHERE TICKET_ID IS NOT NULL AND REGEXP_LIKE(TICKET_ID, '^[0-9]+$')
+      AND (LAST_TITLE ILIKE 'Internet Issues|%' OR LAST_TITLE ILIKE 'Internet Issues |%'
+         OR LAST_TITLE ILIKE 'Others|Recharge expired (Service issue)%'
+         OR LAST_TITLE ILIKE 'Others|TV/Camera issue%'
+         OR LAST_TITLE ILIKE 'Others|Adapter issue%'
+         OR LAST_TITLE ILIKE 'Shifting Request|Shift to New Address%'
+         OR LAST_TITLE ILIKE 'Shifting Request|Shift Within My Home%')
+      AND DATE(DATEADD(MINUTE, 330, TICKET_ADDED_TIME)) >= DATEADD('day', -38, CURRENT_DATE())
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY TICKET_ID ORDER BY TICKET_ADDED_TIME DESC) = 1
+  ),
+  chat AS (
+    SELECT DISTINCT REGEXP_SUBSTR(FINAL_MESSAGE:content:text::STRING, '[0-9]{10,}') AS chat_ticket_id
+    FROM PROD_DB.MESSAGE_ORCHESTRATOR_SERVICE_PUBLIC.MESSAGE_HISTORY
+    WHERE WORKFLOW_NAME IN ('complaint_ticket_type_3_or_4_created','ticket_type_3_or_4_created')
+      AND _FIVETRAN_DELETED = FALSE
+      AND CREATED_AT >= DATEADD('day', -45, CURRENT_TIMESTAMP())
+  ),
+  daily_cc AS (
+    SELECT s.dt,
+      ROUND(100.0 * SUM(IFF(c.chat_ticket_id IS NOT NULL, 1, 0)) / NULLIF(COUNT(*), 0), 1) AS val
+    FROM stm_t s LEFT JOIN chat c ON c.chat_ticket_id = s.tid
+    WHERE s.dt >= DATEADD('day', -30, CURRENT_DATE())
+    GROUP BY s.dt
+  )
+  SELECT
+    'Ticket Creation- Chat Trigger %'                                            AS "Metric",
+    MAX(CASE WHEN dt = DATEADD(DAY, -1, CURRENT_DATE()) THEN val END)          AS "T-1",
+    MAX(CASE WHEN dt = DATEADD(DAY, -2, CURRENT_DATE()) THEN val END)          AS "T-2",
+    MAX(CASE WHEN dt = DATEADD(DAY, -3, CURRENT_DATE()) THEN val END)          AS "T-3",
+    MAX(CASE WHEN dt = DATEADD(DAY, -4, CURRENT_DATE()) THEN val END)          AS "T-4",
+    MAX(CASE WHEN dt = DATEADD(DAY, -5, CURRENT_DATE()) THEN val END)          AS "T-5",
+    MAX(CASE WHEN dt = DATEADD(DAY, -6, CURRENT_DATE()) THEN val END)          AS "T-6",
+    MAX(CASE WHEN dt = DATEADD(DAY, -7, CURRENT_DATE()) THEN val END)          AS "T-7",
+    MAX(CASE WHEN dt = DATEADD(DAY, -8, CURRENT_DATE()) THEN val END)          AS "T-8",
+    ROUND(AVG(val), 1)                                                          AS "30D Avg",
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val), 1)                 AS "30D Median",
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1)                 AS "30D P90"
+  FROM daily_cc
+)
+
+UNION ALL
+
+-- Chat triggered on Ticket Resolution %
+SELECT * FROM (
+  WITH stm_t AS (
+    SELECT TICKET_ID::VARCHAR AS tid,
+      DATE(DATEADD(MINUTE, 330, TICKET_ADDED_TIME)) AS dt,
+      IS_RESOLVED
+    FROM PROD_DB.PUBLIC.SERVICE_TICKET_MODEL
+    WHERE TICKET_ID IS NOT NULL AND REGEXP_LIKE(TICKET_ID, '^[0-9]+$')
+      AND (LAST_TITLE ILIKE 'Internet Issues|%' OR LAST_TITLE ILIKE 'Internet Issues |%'
+         OR LAST_TITLE ILIKE 'Others|Recharge expired (Service issue)%'
+         OR LAST_TITLE ILIKE 'Others|TV/Camera issue%'
+         OR LAST_TITLE ILIKE 'Others|Adapter issue%'
+         OR LAST_TITLE ILIKE 'Shifting Request|Shift to New Address%'
+         OR LAST_TITLE ILIKE 'Shifting Request|Shift Within My Home%')
+      AND DATE(DATEADD(MINUTE, 330, TICKET_ADDED_TIME)) >= DATEADD('day', -38, CURRENT_DATE())
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY TICKET_ID ORDER BY TICKET_ADDED_TIME DESC) = 1
+  ),
+  chat_resolved AS (
+    SELECT DISTINCT FINAL_MESSAGE:context_vars:ticketID::STRING AS chat_ticket_id
+    FROM PROD_DB.MESSAGE_ORCHESTRATOR_SERVICE_PUBLIC.MESSAGE_HISTORY
+    WHERE WORKFLOW_NAME = 'ticket_type_3_or_4_resolved'
+      AND _FIVETRAN_DELETED = FALSE
+      AND CREATED_AT >= DATEADD('day', -45, CURRENT_TIMESTAMP())
+      AND FINAL_MESSAGE:context_vars:ticketID::STRING IS NOT NULL
+  ),
+  daily_cr AS (
+    SELECT s.dt,
+      ROUND(100.0 * SUM(IFF(s.IS_RESOLVED = 1 AND c.chat_ticket_id IS NOT NULL, 1, 0))
+        / NULLIF(SUM(IFF(s.IS_RESOLVED = 1, 1, 0)), 0), 1) AS val
+    FROM stm_t s LEFT JOIN chat_resolved c ON c.chat_ticket_id = s.tid
+    WHERE s.dt >= DATEADD('day', -30, CURRENT_DATE())
+    GROUP BY s.dt
+  )
+  SELECT
+    'Ticket Resolve- Chat Trigger %'                                             AS "Metric",
+    MAX(CASE WHEN dt = DATEADD(DAY, -1, CURRENT_DATE()) THEN val END)          AS "T-1",
+    MAX(CASE WHEN dt = DATEADD(DAY, -2, CURRENT_DATE()) THEN val END)          AS "T-2",
+    MAX(CASE WHEN dt = DATEADD(DAY, -3, CURRENT_DATE()) THEN val END)          AS "T-3",
+    MAX(CASE WHEN dt = DATEADD(DAY, -4, CURRENT_DATE()) THEN val END)          AS "T-4",
+    MAX(CASE WHEN dt = DATEADD(DAY, -5, CURRENT_DATE()) THEN val END)          AS "T-5",
+    MAX(CASE WHEN dt = DATEADD(DAY, -6, CURRENT_DATE()) THEN val END)          AS "T-6",
+    MAX(CASE WHEN dt = DATEADD(DAY, -7, CURRENT_DATE()) THEN val END)          AS "T-7",
+    MAX(CASE WHEN dt = DATEADD(DAY, -8, CURRENT_DATE()) THEN val END)          AS "T-8",
+    ROUND(AVG(val), 1)                                                          AS "30D Avg",
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val), 1)                 AS "30D Median",
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1)                 AS "30D P90"
+  FROM daily_cr
+)
+
+UNION ALL
+
+-- Placeholder: Technician Assigned - Chat triggered %
+SELECT 'Technician Assigned - Chat triggered %' AS "Metric",
+  NULL AS "T-1", NULL AS "T-2", NULL AS "T-3", NULL AS "T-4",
+  NULL AS "T-5", NULL AS "T-6", NULL AS "T-7", NULL AS "T-8",
+  NULL AS "30D Avg", NULL AS "30D Median", NULL AS "30D P90"
+
+UNION ALL
+
+-- Placeholder: STM to TAS Closure Rate
+SELECT 'STM to TAS Closure Rate' AS "Metric",
+  NULL AS "T-1", NULL AS "T-2", NULL AS "T-3", NULL AS "T-4",
+  NULL AS "T-5", NULL AS "T-6", NULL AS "T-7", NULL AS "T-8",
+  NULL AS "30D Avg", NULL AS "30D Median", NULL AS "30D P90"
+
+UNION ALL
+
+-- Placeholder: CX called Wiom- CSP updated %
+SELECT 'CX called Wiom- CSP updated %' AS "Metric",
+  NULL AS "T-1", NULL AS "T-2", NULL AS "T-3", NULL AS "T-4",
+  NULL AS "T-5", NULL AS "T-6", NULL AS "T-7", NULL AS "T-8",
+  NULL AS "30D Avg", NULL AS "30D Median", NULL AS "30D P90"
+
 """
 
 QUERIES["st_detail_match_rate"] = r"""
@@ -4495,6 +4727,195 @@ SELECT
 FROM unpivoted
 GROUP BY s, metric
 ORDER BY s
+"""
+
+QUERIES["st_raw_pn_sent_delivered"] = r"""
+WITH complaints AS (
+    SELECT COMPLAINT_ID,
+        TO_DATE(CONVERT_TIMEZONE('Asia/Kolkata', CREATED_AT)) AS d
+    FROM PROD_DB.CSP_SUPPORT_RESOLUTION_SERVICE_CSP_SUPPORT_RESOLUTION_SERVICE.COMPLAINTS
+    WHERE _FIVETRAN_ACTIVE = TRUE
+      AND TICKET_ID NOT LIKE 'prod-test%'
+      AND STATUS <> 'REDIRECTED'
+      AND CREATED_AT >= DATEADD('day',-38,CURRENT_TIMESTAMP())
+),
+tickets AS (
+    SELECT d, COUNT(*) AS tickets_created FROM complaints GROUP BY d
+),
+pn_sent_exec AS (
+    SELECT DISTINCT PARSE_JSON(properties):execution_id::STRING AS exec_id
+    FROM PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA
+    WHERE event_name = 'restore_task_created'
+      AND TIMESTAMP >= DATEADD('day',-45,CURRENT_TIMESTAMP())
+),
+sent_complaints AS (
+    SELECT DISTINCT c.COMPLAINT_ID, c.d, ps.exec_id
+    FROM pn_sent_exec ps
+    JOIN PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.RESTORE_EXECUTION_CANDIDATES rec
+        ON ps.exec_id = rec.EXECUTION_CANDIDATE_ID
+    JOIN complaints c ON rec.COMPLAINT_ID = c.COMPLAINT_ID
+),
+pn_sent AS (
+    SELECT d, COUNT(DISTINCT COMPLAINT_ID) AS cnt FROM sent_complaints GROUP BY d
+),
+pn_del_exec AS (
+    SELECT DISTINCT PARSE_JSON(properties):execution_id::STRING AS exec_id
+    FROM PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA
+    WHERE event_name = 'pn_delivered'
+      AND TIMESTAMP >= DATEADD('day',-45,CURRENT_TIMESTAMP())
+      AND (
+          SPLIT_PART(PARSE_JSON(properties):wzrk_id::STRING, '_', 1) IN ('1778236503', '1786004220')
+          OR PARSE_JSON(properties):pn_type::STRING = 'ES_RESTORE_CANDIDATE_CREATED'
+      )
+),
+delivered_complaints AS (
+    SELECT DISTINCT sc.COMPLAINT_ID, sc.d
+    FROM sent_complaints sc
+    JOIN pn_del_exec pd ON pd.exec_id = sc.exec_id
+),
+pn_del AS (
+    SELECT d, COUNT(DISTINCT COMPLAINT_ID) AS cnt FROM delivered_complaints GROUP BY d
+),
+combined AS (
+    SELECT t.d, t.tickets_created,
+        COALESCE(s.cnt,0) AS pn_sent,
+        COALESCE(dl.cnt,0) AS pn_del,
+        ROUND(100.0*COALESCE(s.cnt,0)/NULLIF(t.tickets_created,0),1) AS sent_rate,
+        ROUND(100.0*COALESCE(dl.cnt,0)/NULLIF(COALESCE(s.cnt,0),0),1) AS del_rate
+    FROM tickets t
+    LEFT JOIN pn_sent s ON s.d = t.d
+    LEFT JOIN pn_del dl ON dl.d = t.d
+    WHERE t.d >= DATEADD('day',-30,CURRENT_DATE())
+),
+metrics AS (
+    SELECT 1 AS s, 'Complaints Created' AS metric, d, tickets_created AS val FROM combined
+    UNION ALL SELECT 2, 'PN Sent', d, pn_sent FROM combined
+    UNION ALL SELECT 3, 'PN Sent Rate %', d, sent_rate FROM combined
+    UNION ALL SELECT 4, 'PN Delivered (of sent)', d, pn_del FROM combined
+    UNION ALL SELECT 5, 'PN Delivery Rate %', d, del_rate FROM combined
+)
+SELECT metric AS "Metric",
+    MAX(CASE WHEN d=DATEADD('day',-1,CURRENT_DATE()) THEN val END) AS "T-1",
+    MAX(CASE WHEN d=DATEADD('day',-2,CURRENT_DATE()) THEN val END) AS "T-2",
+    MAX(CASE WHEN d=DATEADD('day',-3,CURRENT_DATE()) THEN val END) AS "T-3",
+    MAX(CASE WHEN d=DATEADD('day',-4,CURRENT_DATE()) THEN val END) AS "T-4",
+    MAX(CASE WHEN d=DATEADD('day',-5,CURRENT_DATE()) THEN val END) AS "T-5",
+    MAX(CASE WHEN d=DATEADD('day',-6,CURRENT_DATE()) THEN val END) AS "T-6",
+    MAX(CASE WHEN d=DATEADD('day',-7,CURRENT_DATE()) THEN val END) AS "T-7",
+    MAX(CASE WHEN d=DATEADD('day',-8,CURRENT_DATE()) THEN val END) AS "T-8",
+    ROUND(AVG(val),1) AS "30D Avg",
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "30D Median",
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "30D P90"
+FROM metrics GROUP BY metric, s ORDER BY s
+"""
+
+QUERIES["st_raw_chat_creation"] = r"""
+WITH stm_t AS (
+    SELECT TICKET_ID::VARCHAR AS tid,
+        DATE(DATEADD(MINUTE, 330, TICKET_ADDED_TIME)) AS dt
+    FROM PROD_DB.PUBLIC.SERVICE_TICKET_MODEL
+    WHERE TICKET_ID IS NOT NULL
+      AND REGEXP_LIKE(TICKET_ID, '^[0-9]+$')
+      AND (LAST_TITLE ILIKE 'Internet Issues|%' OR LAST_TITLE ILIKE 'Internet Issues |%'
+         OR LAST_TITLE ILIKE 'Others|Recharge expired (Service issue)%'
+         OR LAST_TITLE ILIKE 'Others|TV/Camera issue%'
+         OR LAST_TITLE ILIKE 'Others|Adapter issue%'
+         OR LAST_TITLE ILIKE 'Shifting Request|Shift to New Address%'
+         OR LAST_TITLE ILIKE 'Shifting Request|Shift Within My Home%')
+      AND DATE(DATEADD(MINUTE, 330, TICKET_ADDED_TIME)) >= DATEADD('day', -38, CURRENT_DATE())
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY TICKET_ID ORDER BY TICKET_ADDED_TIME DESC) = 1
+),
+chat AS (
+    SELECT DISTINCT REGEXP_SUBSTR(FINAL_MESSAGE:content:text::STRING, '[0-9]{10,}') AS chat_ticket_id
+    FROM PROD_DB.MESSAGE_ORCHESTRATOR_SERVICE_PUBLIC.MESSAGE_HISTORY
+    WHERE WORKFLOW_NAME IN ('complaint_ticket_type_3_or_4_created','ticket_type_3_or_4_created')
+      AND _FIVETRAN_DELETED = FALSE
+      AND CREATED_AT >= DATEADD('day', -45, CURRENT_TIMESTAMP())
+),
+daily AS (
+    SELECT s.dt, COUNT(*) AS stm_tickets,
+        SUM(IFF(c.chat_ticket_id IS NOT NULL, 1, 0)) AS chat_triggered,
+        SUM(IFF(c.chat_ticket_id IS NULL, 1, 0)) AS no_chat,
+        ROUND(100.0 * SUM(IFF(c.chat_ticket_id IS NOT NULL, 1, 0)) / NULLIF(COUNT(*), 0), 1) AS match_pct
+    FROM stm_t s LEFT JOIN chat c ON c.chat_ticket_id = s.tid
+    WHERE s.dt >= DATEADD('day', -30, CURRENT_DATE())
+    GROUP BY s.dt
+),
+metrics AS (
+    SELECT 1 AS sort_order, 'STM Tickets' AS metric, dt, stm_tickets AS val FROM daily
+    UNION ALL SELECT 2, 'Chat Triggered', dt, chat_triggered FROM daily
+    UNION ALL SELECT 3, 'No Chat', dt, no_chat FROM daily
+    UNION ALL SELECT 4, 'Ticket Creation- Chat Trigger %', dt, match_pct FROM daily
+)
+SELECT metric AS "Metric",
+    MAX(CASE WHEN dt = DATEADD('day',-1,CURRENT_DATE()) THEN val END) AS "T-1",
+    MAX(CASE WHEN dt = DATEADD('day',-2,CURRENT_DATE()) THEN val END) AS "T-2",
+    MAX(CASE WHEN dt = DATEADD('day',-3,CURRENT_DATE()) THEN val END) AS "T-3",
+    MAX(CASE WHEN dt = DATEADD('day',-4,CURRENT_DATE()) THEN val END) AS "T-4",
+    MAX(CASE WHEN dt = DATEADD('day',-5,CURRENT_DATE()) THEN val END) AS "T-5",
+    MAX(CASE WHEN dt = DATEADD('day',-6,CURRENT_DATE()) THEN val END) AS "T-6",
+    MAX(CASE WHEN dt = DATEADD('day',-7,CURRENT_DATE()) THEN val END) AS "T-7",
+    MAX(CASE WHEN dt = DATEADD('day',-8,CURRENT_DATE()) THEN val END) AS "T-8",
+    ROUND(AVG(val),1) AS "30D Avg",
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "30D Median",
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "30D P90"
+FROM metrics GROUP BY metric, sort_order ORDER BY sort_order
+"""
+
+QUERIES["st_raw_chat_resolution"] = r"""
+WITH stm_t AS (
+    SELECT TICKET_ID::VARCHAR AS tid,
+        DATE(DATEADD(MINUTE, 330, TICKET_ADDED_TIME)) AS dt,
+        IS_RESOLVED
+    FROM PROD_DB.PUBLIC.SERVICE_TICKET_MODEL
+    WHERE TICKET_ID IS NOT NULL
+      AND REGEXP_LIKE(TICKET_ID, '^[0-9]+$')
+      AND (LAST_TITLE ILIKE 'Internet Issues|%' OR LAST_TITLE ILIKE 'Internet Issues |%'
+         OR LAST_TITLE ILIKE 'Others|Recharge expired (Service issue)%'
+         OR LAST_TITLE ILIKE 'Others|TV/Camera issue%'
+         OR LAST_TITLE ILIKE 'Others|Adapter issue%'
+         OR LAST_TITLE ILIKE 'Shifting Request|Shift to New Address%'
+         OR LAST_TITLE ILIKE 'Shifting Request|Shift Within My Home%')
+      AND DATE(DATEADD(MINUTE, 330, TICKET_ADDED_TIME)) >= DATEADD('day', -38, CURRENT_DATE())
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY TICKET_ID ORDER BY TICKET_ADDED_TIME DESC) = 1
+),
+chat_resolved AS (
+    SELECT DISTINCT FINAL_MESSAGE:context_vars:ticketID::STRING AS chat_ticket_id
+    FROM PROD_DB.MESSAGE_ORCHESTRATOR_SERVICE_PUBLIC.MESSAGE_HISTORY
+    WHERE WORKFLOW_NAME = 'ticket_type_3_or_4_resolved'
+      AND _FIVETRAN_DELETED = FALSE
+      AND CREATED_AT >= DATEADD('day', -45, CURRENT_TIMESTAMP())
+      AND FINAL_MESSAGE:context_vars:ticketID::STRING IS NOT NULL
+),
+daily AS (
+    SELECT s.dt, COUNT(*) AS stm_tickets,
+        SUM(IFF(s.IS_RESOLVED = 1, 1, 0)) AS resolved,
+        SUM(IFF(s.IS_RESOLVED = 1 AND c.chat_ticket_id IS NOT NULL, 1, 0)) AS chat_triggered,
+        SUM(IFF(s.IS_RESOLVED = 1 AND c.chat_ticket_id IS NULL, 1, 0)) AS no_chat
+    FROM stm_t s LEFT JOIN chat_resolved c ON c.chat_ticket_id = s.tid
+    WHERE s.dt >= DATEADD('day', -30, CURRENT_DATE())
+    GROUP BY s.dt
+),
+metrics AS (
+    SELECT 1 AS sort_order, 'STM Tickets Created' AS metric, dt, stm_tickets AS val FROM daily
+    UNION ALL SELECT 2, 'Resolved Till Date', dt, resolved FROM daily
+    UNION ALL SELECT 3, 'Resolved + Chat Triggered', dt, chat_triggered FROM daily
+    UNION ALL SELECT 4, 'Resolved + No Chat', dt, no_chat FROM daily
+    UNION ALL SELECT 5, 'Ticket Resolve- Chat Trigger %', dt, ROUND(100.0 * chat_triggered / NULLIF(resolved, 0), 1) FROM daily
+)
+SELECT metric AS "Metric",
+    MAX(CASE WHEN dt = DATEADD('day',-1,CURRENT_DATE()) THEN val END) AS "T-1",
+    MAX(CASE WHEN dt = DATEADD('day',-2,CURRENT_DATE()) THEN val END) AS "T-2",
+    MAX(CASE WHEN dt = DATEADD('day',-3,CURRENT_DATE()) THEN val END) AS "T-3",
+    MAX(CASE WHEN dt = DATEADD('day',-4,CURRENT_DATE()) THEN val END) AS "T-4",
+    MAX(CASE WHEN dt = DATEADD('day',-5,CURRENT_DATE()) THEN val END) AS "T-5",
+    MAX(CASE WHEN dt = DATEADD('day',-6,CURRENT_DATE()) THEN val END) AS "T-6",
+    MAX(CASE WHEN dt = DATEADD('day',-7,CURRENT_DATE()) THEN val END) AS "T-7",
+    MAX(CASE WHEN dt = DATEADD('day',-8,CURRENT_DATE()) THEN val END) AS "T-8",
+    ROUND(AVG(val),1) AS "30D Avg",
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val),1) AS "30D Median",
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val),1) AS "30D P90"
+FROM metrics GROUP BY metric, sort_order ORDER BY sort_order
 """
 
 QUERIES["st_raw_match_rate"] = r"""

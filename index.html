@@ -320,16 +320,33 @@ function loadMetric(key, wfName, type) {
   const body = document.getElementById('mainBody');
   const stClickable = key === 'service_tickets_health' ? {
     'STM to Kapture Match Rate': 'st-detail-stm-kapture',
-    'Service Ticket (STM-SRS-TAS) Match Rate': 'st-detail-match',
-    'Enrichment Rate': 'st-detail-enrichment',
-    'Ticket Close Match % (SRS · TAS · STM)': 'st-detail-closure',
-    'TAT Calculation Accuracy': 'st-detail-tat'
+    'Service Ticket- PN Sent Rate (%)': 'st-detail-pn-sent-delivered',
+    'Service Ticket- PN Delivery Rate (%)': 'st-detail-pn-sent-delivered',
+    'Ticket Creation- Chat Trigger %': 'st-detail-chat-creation',
+    'Ticket Resolve- Chat Trigger %': 'st-detail-chat-resolution',
   } : null;
   let html = '';
   if (key === 'pickup_tickets_efficiency' && rows && rows.length > 0) {
     html = '<div class="section-label">PUT Closure TAT</div>' + buildTableHtml(rows, cols, false);
   } else if (rows && rows.length > 0) {
     html = buildTableHtml(rows, cols, isRates, stClickable, isHealthView);
+  }
+
+  if (key === 'service_tickets_health') {
+    const ST_DETAIL_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','30D Avg','30D Median','30D P90'];
+    const stDetailSections = [
+      { key: 'st_stm_kapture_match',       id: 'st-detail-stm-kapture',       title: 'STM to Kapture Match Rate — Daily Breakdown' },
+      { key: 'st_raw_pn_sent_delivered',    id: 'st-detail-pn-sent-delivered', title: 'PN Sent & Delivery Rate — Daily Breakdown' },
+      { key: 'st_raw_chat_creation',        id: 'st-detail-chat-creation',     title: 'Chat Triggered on Ticket Creation — Daily Breakdown' },
+      { key: 'st_raw_chat_resolution',      id: 'st-detail-chat-resolution',   title: 'Chat Triggered on Ticket Resolution — Daily Breakdown' },
+    ];
+    stDetailSections.forEach(sec => {
+      const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[sec.key] : null;
+      if (d && d.length > 0) {
+        html += '<div id="' + sec.id + '" class="section-label" style="margin-top:36px">' + sec.title + '</div>';
+        html += buildTableHtml(d, ST_DETAIL_COLS, false);
+      }
+    });
   }
 
   if (key === 'earnings_raw') {
@@ -728,34 +745,32 @@ function loadMetric(key, wfName, type) {
       });
       html += '</select></div>';
       html += '<div id="cf-cohort-table"></div>';
-      // Store data and render function globally
-      html += '<script>';
-      html += 'window._cfCohorts = ' + JSON.stringify(cohorts) + ';';
-      html += 'window._cfDayCols = ' + JSON.stringify(CF_DAY_COLS) + ';';
-      html += 'window._renderCfCohort = function() {';
-      html += '  var sel = document.getElementById("cf-cohort-select");';
-      html += '  var cd = sel.value;';
-      html += '  var rows = window._cfCohorts[cd] || [];';
-      html += '  var cols = window._cfDayCols;';
-      html += '  var h = "<div class=\\"table-wrap\\"><table><thead><tr><th>Region</th><th>State</th>";';
-      html += '  cols.forEach(function(c){ h += "<th>" + c + "</th>"; });';
-      html += '  h += "<th>Cohort Size</th></tr></thead><tbody>";';
-      html += '  rows.forEach(function(row){';
-      html += '    var region = row.region || row.REGION || "";';
-      html += '    var state = row.state || row.STATE || "";';
-      html += '    h += "<tr><td>" + region + "</td><td>" + state + "</td>";';
-      html += '    cols.forEach(function(c){';
-      html += '      var v = row[c];';
-      html += '      h += "<td>" + (v != null && v !== 0 ? v : (v === 0 ? "0" : "—")) + "</td>";';
-      html += '    });';
-      html += '    var cs = row.cohort_size || row.COHORT_SIZE || "";';
-      html += '    h += "<td>" + cs + "</td></tr>";';
-      html += '  });';
-      html += '  h += "</tbody></table></div>";';
-      html += '  document.getElementById("cf-cohort-table").innerHTML = h;';
-      html += '};';
-      html += 'setTimeout(window._renderCfCohort, 0);';
-      html += '<\/script>';
+      // Store data and render function on window (script tags in innerHTML don't execute)
+      window._cfCohorts = cohorts;
+      window._cfDayCols = CF_DAY_COLS;
+      window._renderCfCohort = function() {
+        var sel = document.getElementById('cf-cohort-select');
+        if (!sel) return;
+        var cd = sel.value;
+        var rows = window._cfCohorts[cd] || [];
+        var cols = window._cfDayCols;
+        var h = '<div class="table-wrap"><table><thead><tr><th>Region</th><th>State</th>';
+        cols.forEach(function(c){ h += '<th>' + c + '</th>'; });
+        h += '<th>Cohort Size</th></tr></thead><tbody>';
+        rows.forEach(function(row){
+          var region = row.region || row.REGION || '';
+          var state = row.state || row.STATE || '';
+          h += '<tr><td>' + region + '</td><td>' + state + '</td>';
+          cols.forEach(function(c){
+            var v = row[c];
+            h += '<td>' + (v != null && v !== 0 ? v : (v === 0 ? '0' : '—')) + '</td>';
+          });
+          var cs = row.cohort_size || row.COHORT_SIZE || '';
+          h += '<td>' + cs + '</td></tr>';
+        });
+        h += '</tbody></table></div>';
+        document.getElementById('cf-cohort-table').innerHTML = h;
+      };
     }
     if (!html) {
       html = '<div class="no-data"><p>No data loaded for this metric yet.<br>Run <code>python refresh_workflows.py</code> to fetch data.</p></div>';
@@ -772,6 +787,13 @@ function loadMetric(key, wfName, type) {
       { key: 'st_raw_pn_delivery',   title: 'PN Delivery — Tickets vs CSP PN Delivered', multi: false, cols: COLS_HEALTH },
       { key: 'st_raw_shifting_address', title: 'Shifting Address — Counts',             multi: false },
       { key: 'st_raw_reopen',        title: 'Reopen — SRS Reopened vs TAS Within 1hr',  multi: false },
+      { key: 'st_detail_match_rate',  title: 'Service Ticket (STM-SRS-TAS) Match Rate — by Ticket Type', multi: true, labelCols: ['Ticket Type','Metric'] },
+      { key: 'st_detail_enrichment',  title: 'Enrichment Rate — Field-Level Breakdown',  multi: false },
+      { key: 'st_detail_closure',     title: 'Ticket Closure Match Rate — Directional Breakdown', multi: false },
+      { key: 'st_detail_tat_accuracy', title: 'TAT Calculation Accuracy — by Category',  multi: true, labelCols: ['Category','Rule'] },
+      { key: 'st_raw_pn_sent_delivered', title: 'PN Sent & Delivery Rate — Daily Breakdown', multi: false },
+      { key: 'st_raw_chat_creation',     title: 'Chat Triggered on Ticket Creation — Daily', multi: false },
+      { key: 'st_raw_chat_resolution',   title: 'Chat Triggered on Ticket Resolution — Daily', multi: false },
     ];
     rawSections.forEach((sec, i) => {
       const d = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA[sec.key] : null;
@@ -807,34 +829,6 @@ function loadMetric(key, wfName, type) {
     });
   }
 
-  if (key === 'service_tickets_health') {
-    const DATA_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'];
-    const stmKapture = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['st_stm_kapture_match'] : null;
-    if (stmKapture && stmKapture.length > 0) {
-      html += '<div id="st-detail-stm-kapture" class="section-label" style="margin-top:36px">STM to Kapture Match Rate — Daily Breakdown</div>';
-      html += buildTableHtml(stmKapture, DATA_COLS, false);
-    }
-    const matchRate = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['st_detail_match_rate'] : null;
-    if (matchRate && matchRate.length > 0) {
-      html += '<div id="st-detail-match" class="section-label" style="margin-top:36px">Service Ticket (STM-SRS-TAS) Match Rate — by Ticket Type</div>';
-      html += buildMultiLabelTableHtml(matchRate, ['Ticket Type','Metric'], DATA_COLS, true);
-    }
-    const enrichment = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['st_detail_enrichment'] : null;
-    if (enrichment && enrichment.length > 0) {
-      html += '<div id="st-detail-enrichment" class="section-label" style="margin-top:36px">Enrichment Rate — Field-Level Breakdown</div>';
-      html += buildTableHtml(enrichment, DATA_COLS, false);
-    }
-    const closure = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['st_detail_closure'] : null;
-    if (closure && closure.length > 0) {
-      html += '<div id="st-detail-closure" class="section-label" style="margin-top:36px">Ticket Closure Match Rate — Directional Breakdown</div>';
-      html += buildTableHtml(closure, DATA_COLS, false);
-    }
-    const tatAcc = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['st_detail_tat_accuracy'] : null;
-    if (tatAcc && tatAcc.length > 0) {
-      html += '<div id="st-detail-tat" class="section-label" style="margin-top:36px">TAT Calculation Accuracy — by Category</div>';
-      html += buildMultiLabelTableHtml(tatAcc, ['Category','Rule'], DATA_COLS, true);
-    }
-  }
 
   if (key === 'weekly_health_review') {
     const WHR_COLS = ['D-1','D-2','D-3','W-1','W-2','W-3','M-1','M-2','M-3'];
@@ -1076,6 +1070,7 @@ function loadMetric(key, wfName, type) {
   }
 
   body.innerHTML = html;
+  if (window._renderCfCohort) window._renderCfCohort();
 }
 
 function buildTatHtml(rows) {

@@ -28,7 +28,8 @@ restore AS (
     TICKET_ID,
     COMPLAINT_ID,
     STATE,
-    ASSIGNED_TECHNICIAN_ID
+    ASSIGNED_TECHNICIAN_ID,
+    EXECUTOR_ID
   FROM PROD_DB.DBT_CSP.TAS_RESTORE_EXECUTION_CANDIDATES
   WHERE ETL_CURRENT = TRUE
     AND TICKET_ID IS NOT NULL
@@ -39,7 +40,8 @@ joined AS (
     s.TICKET_ID,
     r.COMPLAINT_ID,
     r.STATE,
-    r.ASSIGNED_TECHNICIAN_ID
+    r.ASSIGNED_TECHNICIAN_ID,
+    r.EXECUTOR_ID
   FROM stm_tickets s
   LEFT JOIN restore r ON r.TICKET_ID = s.TICKET_ID
 ),
@@ -48,6 +50,7 @@ ticket_level AS (
     dt,
     TICKET_ID,
     COUNT(COMPLAINT_ID)                                                 AS total_complaints,
+    SUM(IFF(EXECUTOR_ID IS NOT NULL, 1, 0))                             AS executor_assigned,
     SUM(IFF(ASSIGNED_TECHNICIAN_ID IS NOT NULL, 1, 0))                  AS tech_assigned,
     SUM(IFF(STATE = 'COMPLETED', 1, 0))                                 AS completed_complaints,
     IFF(total_complaints > 0 AND completed_complaints = total_complaints, 1, 0) AS ticket_fully_closed
@@ -59,6 +62,7 @@ daily AS (
     dt,
     COUNT(*)                            AS tickets_created,
     SUM(total_complaints)               AS total_complaints,
+    SUM(executor_assigned)              AS executor_assigned,
     SUM(tech_assigned)                  AS tech_assigned,
     SUM(completed_complaints)           AS complaints_closed,
     SUM(ticket_fully_closed)            AS tickets_closed
@@ -68,9 +72,10 @@ daily AS (
 unpivoted AS (
   SELECT dt, 1 AS sk, '1. Tickets Created'       AS metric, tickets_created::FLOAT    AS val FROM daily
   UNION ALL SELECT dt, 2, '2. Total Complaints',             total_complaints::FLOAT          FROM daily
-  UNION ALL SELECT dt, 3, '3. Technician Assigned',          tech_assigned::FLOAT             FROM daily
-  UNION ALL SELECT dt, 4, '4. Complaints Closed',            complaints_closed::FLOAT         FROM daily
-  UNION ALL SELECT dt, 5, '5. Tickets Closed (all resolved)', tickets_closed::FLOAT           FROM daily
+  UNION ALL SELECT dt, 3, '2b. Executor Assigned',           executor_assigned::FLOAT         FROM daily
+  UNION ALL SELECT dt, 4, '3. Technician Assigned',          tech_assigned::FLOAT             FROM daily
+  UNION ALL SELECT dt, 5, '4. Complaints Closed',            complaints_closed::FLOAT         FROM daily
+  UNION ALL SELECT dt, 6, '5. Tickets Closed (all resolved)', tickets_closed::FLOAT           FROM daily
 )
 SELECT
   metric AS "Metric",
