@@ -782,11 +782,8 @@ function loadMetric(key, wfName, type) {
     // Show old health metrics at top of raw with clickable links to detail sections
     const healthData = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['service_tickets_health'] : null;
     if (healthData && healthData.length > 0) {
-      const oldMetrics = healthData.filter(r => !stHealthNewMetrics.includes(r['Metric'] || r['metric'] || r['METRIC']));
-      if (oldMetrics.length > 0) {
-        html += '<div class="section-label">Health Summary</div>';
-        html += buildTableHtml(oldMetrics, COLS_RATES, true, stRawClickable, true);
-      }
+      html += '<div class="section-label">Health Summary</div>';
+      html += buildTableHtml(healthData, COLS_RATES, true, stAllClickable, true);
     }
     const RAW_COLS = ['T-1','T-2','T-3','T-4','T-5','T-6','T-7','T-8','Mean','Median','P90'];
     const rawSections = [
@@ -1223,7 +1220,7 @@ function buildTableHtml(rows, cols, pct, clickable, redHighlight) {
     const isBlue = name === 'STM to Kapture Match Rate';
     html += '<tr' + (isBlue ? ' style="background:#e8f0fe"' : '') + '>';
     const anchor = clickable && clickable[name];
-    html += '<td>' + (anchor ? '<span class="metric-link" ' + (isBlue ? 'style="color:#1a73e8" ' : '') + 'onclick="loadMetric(\'service_tickets_raw\',\'Service Tickets\',\'Raw\');setTimeout(function(){var el=document.getElementById(\'' + anchor + '\');if(el)el.scrollIntoView({behavior:\'smooth\',block:\'start\'});},100)">' + name + ' ↓</span>' : name) + '</td>';
+    html += '<td>' + (anchor ? '<span class="metric-link" ' + (isBlue ? 'style="color:#1a73e8" ' : '') + 'onclick="var el=document.getElementById(\'' + anchor + '\');if(el){el.scrollIntoView({behavior:\'smooth\',block:\'start\'})}else{loadMetric(\'service_tickets_raw\',\'Service Tickets\',\'Raw\');setTimeout(function(){var e=document.getElementById(\'' + anchor + '\');if(e)e.scrollIntoView({behavior:\'smooth\',block:\'start\'});},150)}">' + name + ' ↓</span>' : name) + '</td>';
     cols.forEach(c => {
       const v = row[c] ?? row[c.toUpperCase()] ?? '';
       const numV = parseFloat(v);
