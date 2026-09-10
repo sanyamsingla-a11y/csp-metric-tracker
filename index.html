@@ -660,7 +660,34 @@ function loadMetric(key, wfName, type) {
 
   if (key === 'service_tickets_efficiency') {
     html = '';
-    // --- Assignment & Closure Breakdown (on top) ---
+    // --- % Resolved within TAT (on top) ---
+    const slaDataEff = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['wer_service_resolved_sla'] : null;
+    if (slaDataEff && slaDataEff.length > 0) {
+      const SLA_COLS = ['D-2','D-3','D-4','Week-1','Week-2','Week-3','M-1','M-2','M-3'];
+      const slaExpandId = 'st-eff-sla-expand';
+      html += '<div class="section-label">Service Tickets Resolved within TAT%</div>';
+      html += '<div style="overflow-x:auto"><table><thead><tr><th>Entry Type</th>';
+      SLA_COLS.forEach(c => { html += '<th>' + c + '</th>'; });
+      html += '</tr></thead><tbody>';
+      const slaAgg = slaDataEff[0];
+      const slaSubs = slaDataEff.slice(1);
+      const slaAggLabel = slaAgg['Entry Type'] || slaAgg.ENTRY_TYPE || '% Resolved within TAT';
+      html += '<tr style="font-weight:600"><td>';
+      if (slaSubs.length > 0) {
+        html += '<span style="cursor:pointer;user-select:none" onclick="document.querySelectorAll(\'.' + slaExpandId + '\').forEach(r=>r.style.display=r.style.display===\'table-row\'?\'none\':\'table-row\');this.textContent=this.textContent.trim()===\'▶\'?\'▼ \':\'▶ \'">▶ </span>';
+      }
+      html += slaAggLabel + '</td>';
+      SLA_COLS.forEach(c => { const v = slaAgg[c]; html += '<td>' + (v != null ? parseFloat(v).toFixed(1) : '—') + '</td>'; });
+      html += '</tr>';
+      slaSubs.forEach(sr => {
+        const label = sr['Entry Type'] || sr.ENTRY_TYPE || '';
+        html += '<tr class="' + slaExpandId + '" style="display:none"><td style="padding-left:24px;font-style:italic">' + label + '</td>';
+        SLA_COLS.forEach(c => { const v = sr[c]; html += '<td>' + (v != null ? parseFloat(v).toFixed(1) : '—') + '</td>'; });
+        html += '</tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+    // --- Assignment & Closure Breakdown ---
     const acRows = (typeof WORKFLOW_DATA !== 'undefined') ? WORKFLOW_DATA['service_tickets_assignment_closure'] : null;
     if (acRows && acRows.length > 0) {
       const AC_COLS = ['TODAY','T-1','T-2','T-3','T-4','T-5','T-6','T-7','AVG','MEDIAN','P90'];

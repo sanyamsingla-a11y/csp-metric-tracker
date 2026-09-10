@@ -4464,32 +4464,28 @@ daily_oc AS (
     COUNT(*) AS total_tickets,
     SUM(IFF(calls>0,1,0)) AS with_calls,
     ROUND(100.0*with_calls/NULLIF(total_tickets,0),1) AS pct_with_calls,
-    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY calls),2) AS p50,
-    ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY calls),2) AS p75,
-    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY calls),2) AS p90
+    ROUND(SUM(IFF(calls>0,calls,0))::FLOAT/NULLIF(SUM(IFF(calls>0,1,0)),0),2) AS avg_calls_per_caller,
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY IFF(calls>0,calls,NULL)),2) AS median_calls_per_caller
   FROM calls_open_to_close GROUP BY dt
 ),
 daily_24h AS (
   SELECT dt,
     SUM(IFF(calls>0,1,0)) AS with_calls_24h,
     ROUND(100.0*with_calls_24h/NULLIF(COUNT(*),0),1) AS pct_24h,
-    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY calls),2) AS p50,
-    ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY calls),2) AS p75,
-    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY calls),2) AS p90
+    ROUND(SUM(IFF(calls>0,calls,0))::FLOAT/NULLIF(SUM(IFF(calls>0,1,0)),0),2) AS avg_calls_per_caller,
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY IFF(calls>0,calls,NULL)),2) AS median_calls_per_caller
   FROM calls_24h_after_close GROUP BY dt
 ),
 unpivoted AS (
   SELECT dt, 1 AS s, 'Total Tickets (Resolved)' AS metric, total_tickets AS val FROM daily_oc
   UNION ALL SELECT dt, 2, 'Tickets With Calls (open->close)', with_calls FROM daily_oc
   UNION ALL SELECT dt, 3, '% With Calls (open->close)', pct_with_calls FROM daily_oc
-  UNION ALL SELECT dt, 4, 'P50 Calls (open->close)', p50 FROM daily_oc
-  UNION ALL SELECT dt, 5, 'P75 Calls (open->close)', p75 FROM daily_oc
-  UNION ALL SELECT dt, 6, 'P90 Calls (open->close)', p90 FROM daily_oc
-  UNION ALL SELECT dt, 7, 'Tickets With Calls (24h after close)', with_calls_24h FROM daily_24h
-  UNION ALL SELECT dt, 8, '% With Calls (24h after close)', pct_24h FROM daily_24h
-  UNION ALL SELECT dt, 9, 'P50 Calls (24h after close)', p50 FROM daily_24h
-  UNION ALL SELECT dt, 10, 'P75 Calls (24h after close)', p75 FROM daily_24h
-  UNION ALL SELECT dt, 11, 'P90 Calls (24h after close)', p90 FROM daily_24h
+  UNION ALL SELECT dt, 4, 'Avg Calls per Calling User (open->close)', avg_calls_per_caller FROM daily_oc
+  UNION ALL SELECT dt, 5, 'Median Calls per Calling User (open->close)', median_calls_per_caller FROM daily_oc
+  UNION ALL SELECT dt, 6, 'Tickets With Calls (24h after close)', with_calls_24h FROM daily_24h
+  UNION ALL SELECT dt, 7, '% With Calls (24h after close)', pct_24h FROM daily_24h
+  UNION ALL SELECT dt, 8, 'Avg Calls per Calling User (24h after close)', avg_calls_per_caller FROM daily_24h
+  UNION ALL SELECT dt, 9, 'Median Calls per Calling User (24h after close)', median_calls_per_caller FROM daily_24h
 )
 SELECT
   metric AS "Metric",
@@ -4615,18 +4611,16 @@ daily_oc AS (
     COUNT(*) AS total_resolved,
     SUM(IFF(calls>0,1,0)) AS with_calls,
     ROUND(100.0*with_calls/NULLIF(total_resolved,0),1) AS pct_with_calls,
-    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY calls),2) AS p50,
-    ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY calls),2) AS p75,
-    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY calls),2) AS p90
+    ROUND(SUM(IFF(calls>0,calls,0))::FLOAT/NULLIF(SUM(IFF(calls>0,1,0)),0),2) AS avg_calls_per_caller,
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY IFF(calls>0,calls,NULL)),2) AS median_calls_per_caller
   FROM calls_open_to_close GROUP BY dt
 ),
 daily_24h AS (
   SELECT dt,
     SUM(IFF(calls>0,1,0)) AS with_calls_24h,
     ROUND(100.0*with_calls_24h/NULLIF(COUNT(*),0),1) AS pct_24h,
-    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY calls),2) AS p50,
-    ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY calls),2) AS p75,
-    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY calls),2) AS p90
+    ROUND(SUM(IFF(calls>0,calls,0))::FLOAT/NULLIF(SUM(IFF(calls>0,1,0)),0),2) AS avg_calls_per_caller,
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY IFF(calls>0,calls,NULL)),2) AS median_calls_per_caller
   FROM calls_24h_after_close GROUP BY dt
 ),
 unpivoted AS (
@@ -4634,12 +4628,12 @@ unpivoted AS (
   UNION ALL SELECT dt, 1, 'Total Tickets (Resolved)', total_resolved FROM daily_oc
   UNION ALL SELECT dt, 2, 'Tickets With Calls (open-close)', with_calls FROM daily_oc
   UNION ALL SELECT dt, 3, '% With Calls (open-close)', pct_with_calls FROM daily_oc
-  UNION ALL SELECT dt, 4, 'P50 Calls (open-close)', p50 FROM daily_oc
-  UNION ALL SELECT dt, 5, 'P90 Calls (open-close)', p90 FROM daily_oc
+  UNION ALL SELECT dt, 4, 'Avg Calls per Calling User (open-close)', avg_calls_per_caller FROM daily_oc
+  UNION ALL SELECT dt, 5, 'Median Calls per Calling User (open-close)', median_calls_per_caller FROM daily_oc
   UNION ALL SELECT dt, 6, 'Tickets With Calls (24h after close)', with_calls_24h FROM daily_24h
   UNION ALL SELECT dt, 7, '% With Calls (24h after close)', pct_24h FROM daily_24h
-  UNION ALL SELECT dt, 8, 'P50 Calls (24h after close)', p50 FROM daily_24h
-  UNION ALL SELECT dt, 9, 'P90 Calls (24h after close)', p90 FROM daily_24h
+  UNION ALL SELECT dt, 8, 'Avg Calls per Calling User (24h after close)', avg_calls_per_caller FROM daily_24h
+  UNION ALL SELECT dt, 9, 'Median Calls per Calling User (24h after close)', median_calls_per_caller FROM daily_24h
 )
 SELECT
   metric AS "Metric",
