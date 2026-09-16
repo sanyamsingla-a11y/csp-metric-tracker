@@ -3328,31 +3328,49 @@ QUERIES["service_tickets_health"] = r"""
 SELECT * FROM (
   -- 0. STM to Kapture Match Rate
   WITH stm_t AS (
-    SELECT KAPTURE_TICKET_ID::VARCHAR AS tid,
-           DATE(DATEADD(MINUTE,330,TICKET_ADDED_TIME)) AS dt
+    SELECT
+        KAPTURE_TICKET_ID::VARCHAR AS tid,
+        DATE(DATEADD(MINUTE, 330, TICKET_ADDED_TIME)) AS dt
     FROM PROD_DB.PUBLIC.SERVICE_TICKET_MODEL
     WHERE KAPTURE_TICKET_ID IS NOT NULL
-      AND REGEXP_LIKE(KAPTURE_TICKET_ID,'^[0-9]+$')
-      AND (LAST_TITLE ILIKE 'Internet Issues|%' OR LAST_TITLE ILIKE 'Internet Issues |%'
-           OR LAST_TITLE ILIKE 'Others|Recharge expired (Service issue)%'
-           OR LAST_TITLE ILIKE 'Others|TV/Camera issue%'
-           OR LAST_TITLE ILIKE 'Others|Adapter issue%'
-           OR LAST_TITLE ILIKE 'Shifting Request|Shift to New Address%'
-           OR LAST_TITLE ILIKE 'Shifting Request|Shift Within My Home%')
-      AND DATE(DATEADD(MINUTE,330,TICKET_ADDED_TIME)) >= DATEADD('day',-30,CURRENT_DATE())
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY KAPTURE_TICKET_ID ORDER BY TICKET_ADDED_TIME DESC)=1
+      AND REGEXP_LIKE(KAPTURE_TICKET_ID, '^[0-9]+$')
+      AND (
+            LAST_TITLE ILIKE 'Internet Issues|%'
+         OR LAST_TITLE ILIKE 'Internet Issues |%'
+         OR LAST_TITLE ILIKE 'Others|Recharge expired (Service issue)%'
+         OR LAST_TITLE ILIKE 'Others|TV/Camera issue%'
+         OR LAST_TITLE ILIKE 'Others|Adapter issue%'
+         OR LAST_TITLE ILIKE 'Shifting Request|Shift to New Address%'
+         OR LAST_TITLE ILIKE 'Shifting Request|Shift Within My Home%'
+      )
+      AND TICKET_ADDED_TIME >= DATEADD('month', -3, DATE_TRUNC('month', CURRENT_TIMESTAMP()))
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY KAPTURE_TICKET_ID
+        ORDER BY TICKET_ADDED_TIME DESC
+    ) = 1
   ),
   q AS (
-    SELECT DISTINCT TICKET_NO::VARCHAR AS tno
-    FROM PROD_DB.KAPTURE_QUEUE_EMAILS.CUSTOMER_QUEUE_REPORTING_60_DAYS_NEW
-    WHERE INGESTED_AT >= DATEADD('day',-45,CURRENT_TIMESTAMP())
+    SELECT DISTINCT
+        TICKET_NO::VARCHAR AS tno
+    FROM PROD_DB.KAPTURE_ALL_TICKET.KAPTURE_ALL_TICKET_REPORTING
+    WHERE INGESTED_AT >= DATEADD('month', -3, DATE_TRUNC('month', CURRENT_TIMESTAMP()))
+  ),
+  combined AS (
+    SELECT
+        s.dt,
+        s.tid,
+        IFF(q.tno IS NOT NULL, 1, 0) AS in_queue
+    FROM stm_t s
+    LEFT JOIN q ON q.tno = s.tid
   ),
   daily_stm AS (
-    SELECT s.dt,
-      ROUND(100.0*SUM(IFF(q.tno IS NOT NULL,1,0))/COUNT(*),1) AS val
-    FROM stm_t s LEFT JOIN q ON q.tno = s.tid
-    WHERE s.dt >= DATEADD('day',-30,CURRENT_DATE())
-    GROUP BY s.dt
+    SELECT
+        dt,
+        ROUND(100.0 * SUM(in_queue) / NULLIF(COUNT(*), 0), 1) AS val
+    FROM combined
+    WHERE dt >= DATEADD('day', -30, CURRENT_DATE())
+      AND dt < CURRENT_DATE()
+    GROUP BY 1
   )
   SELECT
     'STM to Kapture Match Rate'                                              AS "Metric",
@@ -4255,38 +4273,47 @@ ORDER BY CASE category WHEN 'NO_INTERNET' THEN 1 WHEN 'RECHARGE_DONE_NO_INTERNET
 
 QUERIES["st_stm_kapture_match"] = r"""
 WITH stm_t AS (
-  SELECT KAPTURE_TICKET_ID::VARCHAR AS tid,
-         DATE(DATEADD(MINUTE,330,TICKET_ADDED_TIME)) AS dt
+  SELECT
+      KAPTURE_TICKET_ID::VARCHAR AS tid,
+      DATE(DATEADD(MINUTE, 330, TICKET_ADDED_TIME)) AS dt
   FROM PROD_DB.PUBLIC.SERVICE_TICKET_MODEL
   WHERE KAPTURE_TICKET_ID IS NOT NULL
-    AND REGEXP_LIKE(KAPTURE_TICKET_ID,'^[0-9]+$')
-    AND (LAST_TITLE ILIKE 'Internet Issues|%' OR LAST_TITLE ILIKE 'Internet Issues |%'
-         OR LAST_TITLE ILIKE 'Others|Recharge expired (Service issue)%'
-         OR LAST_TITLE ILIKE 'Others|TV/Camera issue%'
-         OR LAST_TITLE ILIKE 'Others|Adapter issue%'
-         OR LAST_TITLE ILIKE 'Shifting Request|Shift to New Address%'
-         OR LAST_TITLE ILIKE 'Shifting Request|Shift Within My Home%')
-    AND DATE(DATEADD(MINUTE,330,TICKET_ADDED_TIME)) >= DATEADD('day',-38,CURRENT_DATE())
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY KAPTURE_TICKET_ID ORDER BY TICKET_ADDED_TIME DESC)=1
+    AND REGEXP_LIKE(KAPTURE_TICKET_ID, '^[0-9]+$')
+    AND (
+          LAST_TITLE ILIKE 'Internet Issues|%'
+       OR LAST_TITLE ILIKE 'Internet Issues |%'
+       OR LAST_TITLE ILIKE 'Others|Recharge expired (Service issue)%'
+       OR LAST_TITLE ILIKE 'Others|TV/Camera issue%'
+       OR LAST_TITLE ILIKE 'Others|Adapter issue%'
+       OR LAST_TITLE ILIKE 'Shifting Request|Shift to New Address%'
+       OR LAST_TITLE ILIKE 'Shifting Request|Shift Within My Home%'
+    )
+    AND TICKET_ADDED_TIME >= DATEADD('month', -3, DATE_TRUNC('month', CURRENT_TIMESTAMP()))
+  QUALIFY ROW_NUMBER() OVER (
+      PARTITION BY KAPTURE_TICKET_ID
+      ORDER BY TICKET_ADDED_TIME DESC
+  ) = 1
 ),
 q AS (
-  SELECT DISTINCT TICKET_NO::VARCHAR AS tno
-  FROM PROD_DB.KAPTURE_QUEUE_EMAILS.CUSTOMER_QUEUE_REPORTING_60_DAYS_NEW
-  WHERE INGESTED_AT >= DATEADD('day',-45,CURRENT_TIMESTAMP())
+  SELECT DISTINCT
+      TICKET_NO::VARCHAR AS tno
+  FROM PROD_DB.KAPTURE_ALL_TICKET.KAPTURE_ALL_TICKET_REPORTING
+  WHERE INGESTED_AT >= DATEADD('month', -3, DATE_TRUNC('month', CURRENT_TIMESTAMP()))
 ),
 daily AS (
   SELECT s.dt,
     COUNT(*) AS stm_tickets,
     SUM(IFF(q.tno IS NOT NULL,1,0)) AS in_queue,
     SUM(IFF(q.tno IS NULL,1,0)) AS missing,
-    ROUND(100.0*SUM(IFF(q.tno IS NOT NULL,1,0))/COUNT(*),1) AS match_pct
+    ROUND(100.0*SUM(IFF(q.tno IS NOT NULL,1,0))/NULLIF(COUNT(*),0),1) AS match_pct
   FROM stm_t s LEFT JOIN q ON q.tno = s.tid
   WHERE s.dt >= DATEADD('day',-30,CURRENT_DATE())
+    AND s.dt < CURRENT_DATE()
   GROUP BY s.dt
 ),
 metrics AS (
   SELECT 1 AS sort_order, 'STM Tickets' AS metric, dt, stm_tickets AS val FROM daily
-  UNION ALL SELECT 2, 'Kapture Tickets', dt, in_queue FROM daily
+  UNION ALL SELECT 2, 'In Kapture', dt, in_queue FROM daily
   UNION ALL SELECT 3, 'Missing', dt, missing FROM daily
   UNION ALL SELECT 4, 'Match %', dt, match_pct FROM daily
 )
