@@ -6238,7 +6238,7 @@ metrics AS (
     SELECT dt, 'Ticket Within 16 Days',             ticket_present::FLOAT          FROM daily UNION ALL
     SELECT dt, 'Ticket Creation Rate %', ROUND(100.0 * ticket_present / NULLIF(eligible, 0), 2) FROM daily UNION ALL
     SELECT dt, 'NBREC Within +-6h',                 nbrec_present::FLOAT           FROM daily UNION ALL
-    SELECT dt, 'PUT Creation Rate %',    ROUND(100.0 * nbrec_present  / NULLIF(eligible, 0), 2) FROM daily
+    SELECT dt, 'PUT Creation Rate % (R15)',    ROUND(100.0 * nbrec_present  / NULLIF(eligible, 0), 2) FROM daily
 )
 SELECT
     metric AS "Metric",
@@ -6261,7 +6261,7 @@ ORDER BY CASE metric
     WHEN 'Ticket Within 16 Days'   THEN 2
     WHEN 'Ticket Creation Rate %'  THEN 3
     WHEN 'NBREC Within +-6h'       THEN 4
-    WHEN 'PUT Creation Rate %'     THEN 5
+    WHEN 'PUT Creation Rate % (R15)'     THEN 5
 END
 """
 
