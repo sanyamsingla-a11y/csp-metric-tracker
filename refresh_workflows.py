@@ -6112,133 +6112,148 @@ GROUP BY metric ORDER BY metric desc
 """
 
 QUERIES["put_raw_creation_rate"] = r"""
-WITH m_c AS (
-    SELECT DISTINCT CUSTOMER_ID
+-- put_raw_creation_rate v2 — PUT Creation Rate % (R15), no TICKETS table
+--
+-- Question: of customers whose last plan expired 15 days ago (R15) and whose router is still
+-- at their home, what % got an NBREC PUT created by the ~15-day cron?
+--
+-- Changes vs v1 (see PUT_Creation_Rate_Metric_Analysis_2026-09-27.md):
+--  1. DYNAMODB_READ.TICKETS removed entirely. The numerator is now NBREC created in the cron
+--     window (expiry+14 .. expiry+16, IST), not "NBREC within 6h of a ROUTER_PICKUP ticket".
+--     Fixes cases 1-4 (NBREC existed, but no fresh ticket so it could never match).
+--  2. "Already has an open ticket" replaced by "already has an open NBREC" before the window,
+--     with no lookback cap (the old 22-day lookback missed long-running pickups).
+--  3. Device eligibility flipped from an exclusion list to an inclusion rule: a PUT is needed
+--     ONLY if, at the start of the window, the router is DEPLOYED on this customer's own
+--     connection. Every other custody status (WRITTEN_OFF, LOST, IDLE, CUSTODIED, RETURNED,
+--     RETRIEVAL_PENDING, DAMAGED, CUSTOMER_RECOVERY_PENDING...) means no PUT is needed.
+--     Fixes cases 7-9 (WRITTEN_OFF was not in the old list).
+--  4. "Deployed on someone else's connection" is now judged on CURRENT_CONNECTION_ID only.
+--     v1 also accepted LAST_CONNECTION_ID, which still points at the OLD customer after a
+--     redeploy, so re-deployed routers slipped through. Fixes cases 5-6.
+--  5. Pickup already completed for this customer in the 45 days before the window -> no PUT
+--     (only when the router is no longer DEPLOYED here; a same-customer re-install still needs one).
+--  7. Customers with no NETBOX_CUSTODY row are left out of the denominator but shown as their
+--     own row, so a growing count there is visible rather than hidden.
+--  6. Timestamps: CONVERT_TIMEZONE on the TZ-aware NBREC/custody columns (was +330 min).
+
+WITH conn AS (   -- CONNECTIONS is history mode: one current row per connection
+    SELECT CONNECTION_ID, CUSTOMER_ID::VARCHAR AS customer_id
     FROM PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS
+    WHERE _FIVETRAN_ACTIVE
 ),
+m_c AS (SELECT DISTINCT customer_id FROM conn),
+-- each customer's last DONE OTP plan (device_limit=10, store_group_id=0 = real plans)
 last_trum AS (
-    SELECT
-        mc.CUSTOMER_ID                   AS account_id,
-        MAX(trum.OTP_EXPIRY_TIME)::DATE  AS last_otp_expiry
+    SELECT mc.customer_id AS account_id, MAX(trum.OTP_EXPIRY_TIME)::DATE AS last_otp_expiry
     FROM T_ROUTER_USER_MAPPING trum
     JOIN T_WG_CUSTOMER tg ON tg.mobile = trum.mobile
-    JOIN m_c mc           ON mc.CUSTOMER_ID = tg.account_id
+    JOIN m_c mc           ON mc.customer_id = tg.account_id::VARCHAR
     WHERE trum.otp = 'DONE' AND trum.store_group_id = 0
       AND trum.device_limit = 10 AND trum.mobile > '5999999999'
-    GROUP BY mc.CUSTOMER_ID
+    GROUP BY mc.customer_id
 ),
+-- R15 cohort; win_start = expiry+14 00:00 IST, the earliest the cron can fire
 eligible AS (
-    SELECT
-        account_id,
-        last_otp_expiry,
-        DATEADD('day', 15, last_otp_expiry) AS dt
+    SELECT account_id, last_otp_expiry,
+           DATEADD('day', 15, last_otp_expiry) AS dt,
+           TIMESTAMP_TZ_FROM_PARTS(YEAR(last_otp_expiry), MONTH(last_otp_expiry), DAY(last_otp_expiry),
+                                   0, 0, 0, 0, 'Asia/Kolkata') + INTERVAL '14 days' AS win_start
     FROM last_trum
     WHERE DATEADD('day', 15, last_otp_expiry) BETWEEN DATEADD('day', -31, CURRENT_DATE())
                                                   AND DATEADD('day', -1,  CURRENT_DATE())
 ),
-already_has_open_ticket AS (
-    SELECT DISTINCT e.account_id
-    FROM eligible e
-    JOIN PROD_DB.DYNAMODB_READ.TICKETS t
-        ON  t.CUSTOMER_ACCOUNT_ID::VARCHAR = e.account_id::VARCHAR
-        AND t.TICKET_TYPE = 'ROUTER_PICKUP'
-        AND t.STATUS      = 'OPEN'
-        AND DATE(t.CREATED_TIME + INTERVAL '330 minutes')
-                BETWEEN DATEADD('day', -22, e.dt)
-                AND     DATEADD('day', -1,  e.dt)
-),
-dev AS (
-    SELECT e.account_id,
-           e.dt,
-           UPPER(TRIM(w.DEVICE_ID)) AS device_id
-    FROM eligible e
-    LEFT JOIN T_WG_CUSTOMER w ON w.ACCOUNT_ID = e.account_id
-    WHERE w.DEVICE_ID IS NOT NULL
-),
-own_conns AS (
-    SELECT CUSTOMER_ID, CONNECTION_ID
-    FROM PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS
-),
-pit AS (
-    SELECT d.account_id, d.dt, d.device_id,
-           nc.STATUS                 AS status_at_r15,
-           nc.CUSTOMER_ID            AS custody_customer_id,
-           nc.CURRENT_CONNECTION_ID  AS cc,
-           nc.LAST_CONNECTION_ID     AS lc
-    FROM dev d
-    LEFT JOIN PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY nc
-      ON UPPER(TRIM(nc.DEVICE_ID)) = d.device_id
-     AND nc._FIVETRAN_START <= d.dt::TIMESTAMP_TZ
-     AND (nc._FIVETRAN_END  >  d.dt::TIMESTAMP_TZ OR nc._FIVETRAN_END IS NULL)
-),
-device_excluded AS (
-    SELECT DISTINCT account_id
-    FROM pit p
-    WHERE p.status_at_r15 IN ('IDLE','CUSTODIED','RETURNED','RETRIEVAL_PENDING')
-       OR (p.status_at_r15 = 'DEPLOYED'
-           AND COALESCE(p.custody_customer_id::VARCHAR,'~') <> p.account_id::VARCHAR
-           AND NOT EXISTS (
-                 SELECT 1 FROM own_conns c
-                 WHERE c.CUSTOMER_ID::VARCHAR = p.account_id::VARCHAR
-                   AND c.CONNECTION_ID IN (p.cc, p.lc)))
-),
-eligible_need_ticket AS (
-    SELECT * FROM eligible
-    WHERE account_id NOT IN (SELECT account_id FROM already_has_open_ticket)
-      AND account_id NOT IN (SELECT account_id FROM device_excluded)
-),
-ticket_match AS (
-    SELECT
-        e.account_id,
-        e.dt,
-        e.last_otp_expiry,
-        MIN(t.CREATED_TIME + INTERVAL '330 minutes') AS ticket_created_ist
-    FROM eligible_need_ticket e
-    LEFT JOIN PROD_DB.DYNAMODB_READ.TICKETS t
-        ON  t.CUSTOMER_ACCOUNT_ID::VARCHAR = e.account_id::VARCHAR
-        AND t.TICKET_TYPE = 'ROUTER_PICKUP'
-        AND DATE(t.CREATED_TIME + INTERVAL '330 minutes') >= DATEADD('day', 14, e.last_otp_expiry)
-        AND DATE(t.CREATED_TIME + INTERVAL '330 minutes') <= DATEADD('day', 16, e.last_otp_expiry)
-    GROUP BY 1, 2, 3
-),
+-- every NBREC mapped to the customer who owned its connection
 nbrec AS (
-    SELECT
-        c.CUSTOMER_ID::VARCHAR                  AS account_id,
-        nec.CREATED_AT + INTERVAL '330 minutes' AS nbrec_created_at
+    SELECT c.customer_id AS account_id, nec.EXECUTION_CANDIDATE_ID, nec.STATE,
+           nec.CREATED_AT, nec.UPDATED_AT,
+           DATE(CONVERT_TIMEZONE('Asia/Kolkata', nec.CREATED_AT)) AS created_ist_dt
     FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.NBREC_EXECUTION_CANDIDATES nec
-    JOIN PROD_DB.CSP_CONNECTION_LIFECYCLE_SERVICE_CSP_CONNECTION_LIFECYCLE_SERVICE.CONNECTIONS c
-        ON  nec.LAST_CONNECTION_ID = c.CONNECTION_ID
+    JOIN conn c ON c.CONNECTION_ID = nec.LAST_CONNECTION_ID
     WHERE nec._FIVETRAN_ACTIVE
-      AND nec.CREATED_AT >= DATEADD('day', -34, CURRENT_DATE())
+      AND nec.CREATED_AT >= DATEADD('day', -120, CURRENT_DATE())
 ),
+-- router custody record as of the start of the window
+pit AS (
+    SELECT e.account_id, e.dt,
+           nc.DEVICE_ID, nc.STATUS AS status_at_win,
+           nc.CUSTOMER_ID::VARCHAR AS custody_customer_id,
+           cc.customer_id          AS current_conn_customer_id
+    FROM eligible e
+    LEFT JOIN T_WG_CUSTOMER w ON w.ACCOUNT_ID::VARCHAR = e.account_id
+    LEFT JOIN PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY nc
+           ON UPPER(TRIM(nc.DEVICE_ID)) = UPPER(TRIM(w.DEVICE_ID))
+          AND nc._FIVETRAN_START <= e.win_start
+          AND (nc._FIVETRAN_END > e.win_start OR nc._FIVETRAN_END IS NULL)
+    LEFT JOIN conn cc ON cc.CONNECTION_ID = nc.CURRENT_CONNECTION_ID
+),
+-- PUT already running at window start (no lookback cap), or pickup done in the 45 days before it
+prior_nbrec AS (
+    SELECT e.account_id, e.dt,
+           MAX(IFF(n.STATE IN ('PENDING_PICKUP','IN_PROGRESS','VERIFICATION_PENDING')
+                   OR n.UPDATED_AT >= e.win_start, 1, 0))                          AS has_open_nbrec,
+           MAX(IFF(n.STATE = 'COMPLETED' AND n.UPDATED_AT < e.win_start
+                   AND n.UPDATED_AT >= DATEADD('day', -45, e.win_start), 1, 0))    AS has_pickup_done
+    FROM eligible e
+    JOIN nbrec n ON n.account_id = e.account_id AND n.CREATED_AT < e.win_start
+    GROUP BY 1, 2
+),
+classified AS (
+    SELECT e.dt, e.account_id, e.last_otp_expiry, p.DEVICE_ID, p.status_at_win,
+           CASE
+             WHEN pn.has_open_nbrec  = 1                              THEN 'EXCL_OPEN_NBREC'
+             WHEN p.status_at_win IS NULL                             THEN 'NO_CUSTODY_RECORD'
+             WHEN p.status_at_win IN ('WRITTEN_OFF','LOST','DAMAGED') THEN 'EXCL_WRITTEN_OFF_LOST'
+             WHEN p.status_at_win = 'DEPLOYED'
+              AND COALESCE(p.current_conn_customer_id, p.custody_customer_id, '~')
+                  <> e.account_id                                     THEN 'EXCL_DEPLOYED_OTHER_CUSTOMER'
+             WHEN p.status_at_win = 'DEPLOYED'                        THEN 'NEEDS_PUT'
+             -- router is no longer at the customer: label why (a re-install on the same
+             -- customer after a pickup lands in NEEDS_PUT above, never here)
+             WHEN pn.has_pickup_done = 1                              THEN 'EXCL_PICKUP_DONE'
+             ELSE 'EXCL_NOT_AT_CUSTOMER'
+           END AS bucket
+    FROM eligible e
+    LEFT JOIN pit p          ON p.account_id  = e.account_id AND p.dt  = e.dt
+    LEFT JOIN prior_nbrec pn ON pn.account_id = e.account_id AND pn.dt = e.dt
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY e.account_id, e.dt
+                               ORDER BY IFF(p.status_at_win = 'DEPLOYED', 0, 1)) = 1
+),
+-- numerator: NBREC created in the cron window (expiry+14 .. expiry+16, IST)
 coverage AS (
-    SELECT
-        tm.dt,
-        tm.account_id,
-        CASE WHEN tm.ticket_created_ist IS NOT NULL THEN 1 ELSE 0 END AS has_ticket,
-        MAX(CASE WHEN n.account_id IS NOT NULL THEN 1 ELSE 0 END)     AS has_nbrec_6h
-    FROM ticket_match tm
+    SELECT c.dt, c.account_id, c.bucket, c.DEVICE_ID, c.status_at_win,
+           MAX(IFF(n.account_id IS NOT NULL, 1, 0)) AS has_nbrec
+    FROM classified c
     LEFT JOIN nbrec n
-        ON  n.account_id = tm.account_id::VARCHAR
-        AND tm.ticket_created_ist IS NOT NULL
-        AND ABS(DATEDIFF('hour', tm.ticket_created_ist, n.nbrec_created_at)) <= 6
-    GROUP BY 1, 2, 3
+           ON n.account_id = c.account_id
+          AND n.created_ist_dt BETWEEN DATEADD('day', 14, c.last_otp_expiry)
+                                   AND DATEADD('day', 16, c.last_otp_expiry)
+    GROUP BY 1, 2, 3, 4, 5
 ),
 daily AS (
-    SELECT
-        dt,
-        COUNT(*)          AS eligible,
-        SUM(has_ticket)   AS ticket_present,
-        SUM(has_nbrec_6h) AS nbrec_present
-    FROM coverage
-    GROUP BY 1
+    SELECT dt,
+           COUNT(*)                                                  AS r15_customers,
+           SUM(IFF(bucket = 'EXCL_OPEN_NBREC', 1, 0))                AS excl_open_nbrec,
+           SUM(IFF(bucket = 'EXCL_PICKUP_DONE', 1, 0))               AS excl_pickup_done,
+           SUM(IFF(bucket = 'EXCL_WRITTEN_OFF_LOST', 1, 0))          AS excl_written_off,
+           SUM(IFF(bucket = 'EXCL_DEPLOYED_OTHER_CUSTOMER', 1, 0))   AS excl_other_customer,
+           SUM(IFF(bucket = 'EXCL_NOT_AT_CUSTOMER', 1, 0))           AS excl_not_at_customer,
+           SUM(IFF(bucket = 'NO_CUSTODY_RECORD', 1, 0))              AS no_custody_record,
+           SUM(IFF(bucket = 'NEEDS_PUT', 1, 0))                      AS eligible,
+           SUM(IFF(bucket = 'NEEDS_PUT', has_nbrec, 0))              AS nbrec_present
+    FROM coverage GROUP BY 1
 ),
 metrics AS (
-    SELECT dt, 'Eligible Customers'      AS metric, eligible::FLOAT       AS val FROM daily UNION ALL
-    SELECT dt, 'Ticket Within 16 Days',             ticket_present::FLOAT          FROM daily UNION ALL
-    SELECT dt, 'Ticket Creation Rate %', ROUND(100.0 * ticket_present / NULLIF(eligible, 0), 2) FROM daily UNION ALL
-    SELECT dt, 'NBREC Within +-6h',                 nbrec_present::FLOAT           FROM daily UNION ALL
-    SELECT dt, 'PUT Creation Rate % (R15)',    ROUND(100.0 * nbrec_present  / NULLIF(eligible, 0), 2) FROM daily
+    SELECT dt, 'R15 Customers'                       AS metric, r15_customers::FLOAT AS val FROM daily UNION ALL
+    SELECT dt, 'Excl: PUT Already Open',                        excl_open_nbrec::FLOAT      FROM daily UNION ALL
+    SELECT dt, 'Excl: Pickup Already Done',                     excl_pickup_done::FLOAT     FROM daily UNION ALL
+    SELECT dt, 'Excl: Router Written Off / Lost',               excl_written_off::FLOAT     FROM daily UNION ALL
+    SELECT dt, 'Excl: Router Deployed at Other Customer',       excl_other_customer::FLOAT  FROM daily UNION ALL
+    SELECT dt, 'Excl: Router Not at Customer',                  excl_not_at_customer::FLOAT FROM daily UNION ALL
+    SELECT dt, 'No Custody Record',                             no_custody_record::FLOAT    FROM daily UNION ALL
+    SELECT dt, 'Eligible Customers (Need PUT)',                 eligible::FLOAT             FROM daily UNION ALL
+    SELECT dt, 'NBREC Created (Day 14-16)',                     nbrec_present::FLOAT        FROM daily UNION ALL
+    SELECT dt, 'PUT Creation Rate % (R15)',  ROUND(100.0 * nbrec_present / NULLIF(eligible, 0), 2) FROM daily
 )
 SELECT
     metric AS "Metric",
@@ -6250,18 +6265,23 @@ SELECT
     MAX(CASE WHEN dt = DATEADD(day,-6,CURRENT_DATE()) THEN val END) AS "T-6",
     MAX(CASE WHEN dt = DATEADD(day,-7,CURRENT_DATE()) THEN val END) AS "T-7",
     MAX(CASE WHEN dt = DATEADD(day,-8,CURRENT_DATE()) THEN val END) AS "T-8",
-    ROUND(AVG(val), 1)                                               AS "30D Avg",
-    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val), 1)      AS "30D Median",
-    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1)      AS "30D P90"
+    ROUND(AVG(val), 1)                                          AS "30D Avg",
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY val), 1) AS "30D Median",
+    ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY val), 1) AS "30D P90"
 FROM metrics
 WHERE dt >= DATEADD('day', -30, CURRENT_DATE())
 GROUP BY metric
 ORDER BY CASE metric
-    WHEN 'Eligible Customers'      THEN 1
-    WHEN 'Ticket Within 16 Days'   THEN 2
-    WHEN 'Ticket Creation Rate %'  THEN 3
-    WHEN 'NBREC Within +-6h'       THEN 4
-    WHEN 'PUT Creation Rate % (R15)'     THEN 5
+    WHEN 'R15 Customers'                           THEN 1
+    WHEN 'Excl: PUT Already Open'                  THEN 2
+    WHEN 'Excl: Pickup Already Done'               THEN 3
+    WHEN 'Excl: Router Written Off / Lost'         THEN 4
+    WHEN 'Excl: Router Deployed at Other Customer' THEN 5
+    WHEN 'Excl: Router Not at Customer'            THEN 6
+    WHEN 'No Custody Record'                       THEN 7
+    WHEN 'Eligible Customers (Need PUT)'           THEN 8
+    WHEN 'NBREC Created (Day 14-16)'               THEN 9
+    WHEN 'PUT Creation Rate % (R15)'               THEN 10
 END
 """
 
