@@ -112,63 +112,6 @@ ct_events AS (
     AND TRY_PARSE_JSON(ed.properties):execution_id::STRING IN (SELECT execution_candidate_id FROM all_candidates)
   GROUP BY 1
 ),
-cand_csp AS (
-  SELECT DISTINCT
-    ac.execution_candidate_id,
-    ca.MOBILE_NUMBER AS csp_mobile
-  FROM all_candidates ac
-  JOIN PROD_DB.CSP_DEMAND_ALLOCATION_SERVICE_CSP_DEMAND_ALLOCATION_SERVICE.CONNECTION_ALLOCATIONS a
-    ON a.CONNECTION_ID = ac.connection_id
-    AND a.ALLOCATION_STATE IN ('ASSIGNED','ACCEPTED','ACTIVE','RELEASED')
-  JOIN PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT ca
-    ON ca.csp_id = a.CSP_ID
-),
-cand_creation AS (
-  SELECT execution_candidate_id,
-    MIN(_FIVETRAN_START) AS cand_created_at
-  FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES
-  WHERE execution_candidate_id IN (SELECT execution_candidate_id FROM all_candidates)
-  GROUP BY 1
-),
-cand_window AS (
-  SELECT
-    cc.execution_candidate_id,
-    cc.csp_mobile,
-    cr.cand_created_at,
-    LEAD(cr.cand_created_at) OVER (
-      PARTITION BY cc.csp_mobile ORDER BY cr.cand_created_at
-    ) AS next_cand_at
-  FROM cand_csp cc
-  JOIN cand_creation cr ON cc.execution_candidate_id = cr.execution_candidate_id
-),
-wa_raw AS (
-  SELECT
-    event_type,
-    timestamp        AS wa_ts,
-    RIGHT(DEST_ADDR, 10) AS csp_mobile_10
-  FROM GUPSHUP_EVENTS
-  WHERE HSM_TEMPLATE_ID = '8759388'
-    AND event_type IN ('SENT', 'DELIVERED')
-    AND DATE(timestamp) >= CURRENT_DATE - 8
-),
-wa_attributed AS (
-  SELECT
-    cw.execution_candidate_id,
-    wr.event_type
-  FROM wa_raw wr
-  JOIN cand_window cw
-    ON RIGHT(cw.csp_mobile, 10) = wr.csp_mobile_10
-    AND wr.wa_ts >= cw.cand_created_at
-    AND (cw.next_cand_at IS NULL OR wr.wa_ts < cw.next_cand_at)
-),
-wa_cand AS (
-  SELECT
-    execution_candidate_id,
-    MAX(CASE WHEN event_type = 'SENT'      THEN 1 ELSE 0 END) AS wa_sent,
-    MAX(CASE WHEN event_type = 'DELIVERED' THEN 1 ELSE 0 END) AS wa_delivered
-  FROM wa_attributed
-  GROUP BY 1
-),
 candidate_level AS (
   SELECT
     ac.booking_date,
@@ -177,13 +120,11 @@ candidate_level AS (
     COALESCE(ct.pn_sent,           0) AS pn_sent,
     COALESCE(ct.pn_delivered,      0) AS pn_delivered,
     COALESCE(ct.fpn_delivered,     0) AS fpn_delivered,
-    COALESCE(wc.wa_sent,           0) AS wa_sent,
-    COALESCE(wc.wa_delivered,      0) AS wa_delivered,
     COALESCE(ct.slot_pn_sent,      0) AS slot_pn_sent,
     COALESCE(ct.slot_pn_delivered, 0) AS slot_pn_delivered,
     COALESCE(ct.tech_pn_sent,      0) AS tech_pn_sent,
     COALESCE(ct.tech_pn_delivered, 0) AS tech_pn_delivered,
-    CASE WHEN COALESCE(ct.pn_delivered,0)=1 OR COALESCE(ct.fpn_delivered,0)=1 OR COALESCE(wc.wa_delivered,0)=1
+    CASE WHEN COALESCE(ct.pn_delivered,0)=1 OR COALESCE(ct.fpn_delivered,0)=1
          THEN 1 ELSE 0 END            AS attention_delivered,
     CASE WHEN ac.executor_id IS NOT NULL        THEN 1 ELSE 0 END AS tech_assigned,
     CASE WHEN ac.executor_id IS NOT NULL AND COALESCE(ac.is_self_assigned, TRUE) = FALSE
@@ -208,7 +149,6 @@ candidate_level AS (
     ac.failure_reason
   FROM all_candidates ac
   LEFT JOIN ct_events ct ON ac.execution_candidate_id = ct.execution_candidate_id
-  LEFT JOIN wa_cand   wc ON ac.execution_candidate_id = wc.execution_candidate_id
 ),
 daily_cand AS (
   SELECT booking_date AS dt,
@@ -216,8 +156,6 @@ daily_cand AS (
     SUM(pn_sent)                                                                      AS pn_sent_count,
     SUM(pn_delivered)                                                                 AS pn_delivered_count,
     SUM(fpn_delivered)                                                                AS fpn_delivered_count,
-    SUM(wa_sent)                                                                      AS wa_sent_count,
-    SUM(wa_delivered)                                                                 AS wa_delivered_count,
     SUM(attention_delivered)                                                          AS attention_count,
     SUM(slot_pn_sent)                                                                 AS slot_pn_sent_count,
     SUM(slot_pn_delivered)                                                            AS slot_pn_delivered_count,
@@ -255,9 +193,8 @@ FROM (
   UNION ALL SELECT  6, 'PN: # Sent to CSP',                                 dt, pn_sent_count                    FROM daily_cand
   UNION ALL SELECT  7, 'PN: # Delivered',                                   dt, pn_delivered_count               FROM daily_cand
   UNION ALL SELECT  8, 'FPN: # Delivered',                                  dt, fpn_delivered_count              FROM daily_cand
-  UNION ALL SELECT  9, 'WA: # Sent',                                        dt, wa_sent_count                    FROM daily_cand
-  UNION ALL SELECT 10, 'WA: # Delivered',                                   dt, wa_delivered_count               FROM daily_cand
-  UNION ALL SELECT 11, 'Task Attention (PN, FPN, or WA delivered)',          dt, attention_count                  FROM daily_cand
+
+  UNION ALL SELECT 11, 'Task Attention (PN or FPN delivered)',          dt, attention_count                  FROM daily_cand
   UNION ALL SELECT 12, 'Technician Assigned',                               dt, tech_assigned_count              FROM daily_cand
   UNION ALL SELECT 13, 'Technician Assigned (not self)',                    dt, tech_assigned_not_self_count     FROM daily_cand
   UNION ALL SELECT 14, 'Tech Assigned PN: # Sent',                          dt, tech_pn_sent_count               FROM daily_cand
@@ -388,67 +325,6 @@ ct_events AS (
     AND TRY_PARSE_JSON(ed.properties):execution_id::STRING IN (SELECT execution_candidate_id FROM all_candidates)
   GROUP BY 1
 ),
--- Change 2: WhatsApp attribution CTEs
--- Assumption: CONNECTION_ALLOCATIONS has a CSP_ID column -- verify and rename if different
-cand_csp AS (
-  SELECT DISTINCT
-    ac.execution_candidate_id,
-    ca.MOBILE_NUMBER AS csp_mobile
-  FROM all_candidates ac
-  JOIN PROD_DB.CSP_DEMAND_ALLOCATION_SERVICE_CSP_DEMAND_ALLOCATION_SERVICE.CONNECTION_ALLOCATIONS a
-    ON a.CONNECTION_ID = ac.connection_id
-    AND a.ALLOCATION_STATE IN ('ASSIGNED','ACCEPTED','ACTIVE','RELEASED')
-  JOIN PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT ca
-    ON ca.csp_id = a.CSP_ID
-),
--- Use _FIVETRAN_START as creation proxy (all history rows, not just active)
-cand_creation AS (
-  SELECT execution_candidate_id,
-    MIN(_FIVETRAN_START) AS cand_created_at
-  FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES
-  WHERE execution_candidate_id IN (SELECT execution_candidate_id FROM all_candidates)
-  GROUP BY 1
-),
--- Attribution window: WA events in [cand_created_at, next_cand_created_at) -> this candidate
-cand_window AS (
-  SELECT
-    cc.execution_candidate_id,
-    cc.csp_mobile,
-    cr.cand_created_at,
-    LEAD(cr.cand_created_at) OVER (
-      PARTITION BY cc.csp_mobile ORDER BY cr.cand_created_at
-    ) AS next_cand_at
-  FROM cand_csp cc
-  JOIN cand_creation cr ON cc.execution_candidate_id = cr.execution_candidate_id
-),
-wa_raw AS (
-  SELECT
-    event_type,
-    timestamp        AS wa_ts,
-    RIGHT(DEST_ADDR, 10) AS csp_mobile_10
-  FROM GUPSHUP_EVENTS
-  WHERE HSM_TEMPLATE_ID = '8759388'
-    AND event_type IN ('SENT', 'DELIVERED')
-    AND DATE(timestamp) >= CURRENT_DATE - 30
-),
-wa_attributed AS (
-  SELECT
-    cw.execution_candidate_id,
-    wr.event_type
-  FROM wa_raw wr
-  JOIN cand_window cw
-    ON RIGHT(cw.csp_mobile, 10) = wr.csp_mobile_10
-    AND wr.wa_ts >= cw.cand_created_at
-    AND (cw.next_cand_at IS NULL OR wr.wa_ts < cw.next_cand_at)
-),
-wa_cand AS (
-  SELECT
-    execution_candidate_id,
-    MAX(CASE WHEN event_type = 'SENT'      THEN 1 ELSE 0 END) AS wa_sent,
-    MAX(CASE WHEN event_type = 'DELIVERED' THEN 1 ELSE 0 END) AS wa_delivered
-  FROM wa_attributed
-  GROUP BY 1
-),
 candidate_level AS (
   SELECT
     ac.booking_date,
@@ -459,15 +335,13 @@ candidate_level AS (
     COALESCE(ct.pn_clicked,        0) AS pn_clicked,
     COALESCE(ct.fpn_delivered,     0) AS fpn_delivered,
     COALESCE(ct.fpn_clicked,       0) AS fpn_clicked,
-    COALESCE(wc.wa_sent,           0) AS wa_sent,
-    COALESCE(wc.wa_delivered,      0) AS wa_delivered,
     COALESCE(ct.drilldown_opened,  0) AS drilldown_opened,
     COALESCE(ct.slot_pn_sent,      0) AS slot_pn_sent,
     COALESCE(ct.slot_pn_delivered, 0) AS slot_pn_delivered,
     COALESCE(ct.tech_pn_sent,      0) AS tech_pn_sent,
     COALESCE(ct.tech_pn_delivered, 0) AS tech_pn_delivered,
-    -- Change 3: attention and install_task_open now include WA delivered
-    CASE WHEN COALESCE(ct.pn_delivered,0)=1 OR COALESCE(ct.fpn_delivered,0)=1 OR COALESCE(wc.wa_delivered,0)=1
+    -- attention uses PN + FPN only (GUPSHUP_EVENTS removed)
+    CASE WHEN COALESCE(ct.pn_delivered,0)=1 OR COALESCE(ct.fpn_delivered,0)=1
          THEN 1 ELSE 0 END            AS attention_delivered,
     CASE WHEN COALESCE(ct.fpn_delivered,0)=1 OR COALESCE(ct.drilldown_opened,0)=1 OR COALESCE(wc.wa_delivered,0)=1
          THEN 1 ELSE 0 END            AS install_task_open,
@@ -530,7 +404,6 @@ candidate_level AS (
   LEFT JOIN slot_timing st ON ac.execution_candidate_id = st.execution_candidate_id
   LEFT JOIN slot_remind sr ON ac.execution_candidate_id = sr.execution_candidate_id
   LEFT JOIN tech_remind tr ON ac.execution_candidate_id = tr.execution_candidate_id
-  LEFT JOIN wa_cand     wc ON ac.execution_candidate_id = wc.execution_candidate_id
 ),
 daily_cand AS (
   SELECT booking_date AS dt,
@@ -540,8 +413,6 @@ daily_cand AS (
     SUM(CASE WHEN pn_delivered=1 AND pn_clicked=1 THEN 1 ELSE 0 END)                 AS pn_clicked_count,
     SUM(fpn_delivered)                                                                AS fpn_delivered_count,
     SUM(CASE WHEN fpn_delivered=1 AND fpn_clicked=1 THEN 1 ELSE 0 END)               AS fpn_clicked_count,
-    SUM(wa_sent)                                                                      AS wa_sent_count,
-    SUM(wa_delivered)                                                                 AS wa_delivered_count,
     SUM(attention_delivered)                                                          AS attention_count,
     SUM(drilldown_opened)                                                             AS drilldown_opened_count,
     SUM(install_task_open)                                                            AS install_task_open_count,
@@ -604,9 +475,8 @@ FROM (
   UNION ALL SELECT  8, 'PN: # Clicked',                                     dt, pn_clicked_count                 FROM daily_cand
   UNION ALL SELECT  9, 'FPN: # Delivered',                                  dt, fpn_delivered_count              FROM daily_cand
   UNION ALL SELECT 10, 'FPN: # Clicked',                                    dt, fpn_clicked_count                FROM daily_cand
-  UNION ALL SELECT 11, 'WA: # Sent',                                        dt, wa_sent_count                    FROM daily_cand
-  UNION ALL SELECT 12, 'WA: # Delivered',                                   dt, wa_delivered_count               FROM daily_cand
-  UNION ALL SELECT 13, 'Task Attention (PN, FPN, or WA delivered)',          dt, attention_count                  FROM daily_cand
+
+  UNION ALL SELECT 13, 'Task Attention (PN or FPN delivered)',          dt, attention_count                  FROM daily_cand
   UNION ALL SELECT 14, 'Drilldown Open',                                    dt, drilldown_opened_count           FROM daily_cand
   UNION ALL SELECT 15, 'Install Task Open (FPN, Drilldown, or WA)',         dt, install_task_open_count          FROM daily_cand
   UNION ALL SELECT 16, 'Slot Declined by CSP',                              dt, slot_declined_count              FROM daily_cand
@@ -749,63 +619,6 @@ ct_events AS (
       AND JSON_EXTRACT_PATH_TEXT(PROPERTIES, 'execution_id') != ''
     GROUP BY 1
 ),
-cand_csp AS (
-    SELECT DISTINCT
-        ac.execution_candidate_id,
-        ca.MOBILE_NUMBER AS csp_mobile
-    FROM all_candidates ac
-    JOIN PROD_DB.CSP_DEMAND_ALLOCATION_SERVICE_CSP_DEMAND_ALLOCATION_SERVICE.CONNECTION_ALLOCATIONS a
-        ON a.CONNECTION_ID = ac.CONNECTION_ID
-        AND a.ALLOCATION_STATE IN ('ASSIGNED','ACCEPTED','ACTIVE','RELEASED')
-    JOIN PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT ca
-        ON ca.csp_id = a.CSP_ID
-),
-cand_creation AS (
-    SELECT execution_candidate_id,
-        MIN(_FIVETRAN_START) AS cand_created_at
-    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES
-    WHERE execution_candidate_id IN (SELECT execution_candidate_id FROM all_candidates)
-    GROUP BY 1
-),
-cand_window AS (
-    SELECT
-        cc.execution_candidate_id,
-        cc.csp_mobile,
-        cr.cand_created_at,
-        LEAD(cr.cand_created_at) OVER (
-            PARTITION BY cc.csp_mobile ORDER BY cr.cand_created_at
-        ) AS next_cand_at
-    FROM cand_csp cc
-    JOIN cand_creation cr ON cc.execution_candidate_id = cr.execution_candidate_id
-),
-wa_raw AS (
-    SELECT
-        event_type,
-        timestamp        AS wa_ts,
-        RIGHT(DEST_ADDR, 10) AS csp_mobile_10
-    FROM GUPSHUP_EVENTS
-    WHERE HSM_TEMPLATE_ID = '8759388'
-        AND event_type IN ('SENT', 'DELIVERED')
-        AND DATE(timestamp) >= CURRENT_DATE - 30
-),
-wa_attributed AS (
-    SELECT
-        cw.execution_candidate_id,
-        wr.event_type
-    FROM wa_raw wr
-    JOIN cand_window cw
-        ON RIGHT(cw.csp_mobile, 10) = wr.csp_mobile_10
-        AND wr.wa_ts >= cw.cand_created_at
-        AND (cw.next_cand_at IS NULL OR wr.wa_ts < cw.next_cand_at)
-),
-wa_cand AS (
-    SELECT
-        execution_candidate_id,
-        MAX(CASE WHEN event_type = 'SENT'      THEN 1 ELSE 0 END) AS wa_sent,
-        MAX(CASE WHEN event_type = 'DELIVERED' THEN 1 ELSE 0 END) AS wa_delivered
-    FROM wa_attributed
-    GROUP BY 1
-),
 candidate_level AS (
     SELECT
         ac.booking_date,
@@ -816,11 +629,8 @@ candidate_level AS (
         COALESCE(ct.fpn_sent_flag, 0)               AS fpn_sent,
         COALESCE(ct.fpn_delivered, 0)               AS fpn_delivered,
         COALESCE(ct.fpn_action_taken, 0)            AS fpn_action_taken,
-        COALESCE(wc.wa_sent, 0)                     AS wa_sent,
-        COALESCE(wc.wa_delivered, 0)                AS wa_delivered,
         CASE WHEN COALESCE(ct.pn_delivered,0)=1
-              OR COALESCE(ct.fpn_delivered,0)=1
-              OR COALESCE(wc.wa_delivered,0)=1      THEN 1 ELSE 0 END AS task_attention,
+              OR COALESCE(ct.fpn_delivered,0)=1      THEN 1 ELSE 0 END AS task_attention,
         COALESCE(ct.install_candidate_opened, 0)    AS drilldown_open,
         CASE WHEN COALESCE(ct.fpn_delivered,0)=1
               OR COALESCE(ct.install_candidate_opened,0)=1
@@ -881,7 +691,6 @@ candidate_level AS (
     LEFT JOIN slot_remind  sr ON sr.EXECUTION_CANDIDATE_ID = ac.EXECUTION_CANDIDATE_ID
     LEFT JOIN tech_remind  tr ON tr.EXECUTION_CANDIDATE_ID = ac.EXECUTION_CANDIDATE_ID
     LEFT JOIN ct_events    ct ON ct.execution_id = ac.EXECUTION_CANDIDATE_ID
-    LEFT JOIN wa_cand      wc ON wc.execution_candidate_id = ac.EXECUTION_CANDIDATE_ID
 ),
 daily_cand AS (
     SELECT
@@ -1091,51 +900,6 @@ ct_events AS (
       AND JSON_EXTRACT_PATH_TEXT(PROPERTIES, 'execution_id') != ''
     GROUP BY 1
 ),
-cand_csp AS (
-    SELECT DISTINCT
-        ac.EXECUTION_CANDIDATE_ID AS execution_candidate_id,
-        ca.MOBILE_NUMBER AS csp_mobile
-    FROM all_candidates ac
-    JOIN PROD_DB.CSP_DEMAND_ALLOCATION_SERVICE_CSP_DEMAND_ALLOCATION_SERVICE.CONNECTION_ALLOCATIONS a
-        ON a.CONNECTION_ID = ac.CONNECTION_ID
-        AND a.ALLOCATION_STATE IN ('ASSIGNED','ACCEPTED','ACTIVE','RELEASED')
-    JOIN PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT ca
-        ON ca.csp_id = a.CSP_ID
-),
-cand_creation AS (
-    SELECT execution_candidate_id,
-        MIN(_FIVETRAN_START) AS cand_created_at
-    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES
-    WHERE execution_candidate_id IN (SELECT EXECUTION_CANDIDATE_ID FROM all_candidates)
-    GROUP BY 1
-),
-cand_window AS (
-    SELECT
-        cc.execution_candidate_id,
-        cc.csp_mobile,
-        cr.cand_created_at,
-        LEAD(cr.cand_created_at) OVER (
-            PARTITION BY cc.csp_mobile ORDER BY cr.cand_created_at
-        ) AS next_cand_at
-    FROM cand_csp cc
-    JOIN cand_creation cr ON cc.execution_candidate_id = cr.execution_candidate_id
-),
-wa_attributed AS (
-    SELECT cw.execution_candidate_id, wr.event_type
-    FROM PROD_DB.PUBLIC.GUPSHUP_EVENTS wr
-    JOIN cand_window cw
-        ON RIGHT(cw.csp_mobile, 10) = RIGHT(wr.DEST_ADDR, 10)
-        AND wr.timestamp >= cw.cand_created_at
-        AND (cw.next_cand_at IS NULL OR wr.timestamp < cw.next_cand_at)
-    WHERE wr.HSM_TEMPLATE_ID = '8759388'
-      AND wr.event_type = 'DELIVERED'
-      AND DATE(wr.timestamp) >= CURRENT_DATE - 10
-),
-wa_cand AS (
-    SELECT execution_candidate_id, MAX(1) AS wa_delivered
-    FROM wa_attributed
-    GROUP BY 1
-),
 candidate_level AS (
     SELECT
         ac.booking_date AS dt,
@@ -1148,7 +912,6 @@ candidate_level AS (
         CASE WHEN ac.OTP_VERIFIED = TRUE THEN 1 ELSE 0 END AS installed
     FROM all_candidates ac
     LEFT JOIN ct_events ct ON ct.execution_id = ac.EXECUTION_CANDIDATE_ID
-    LEFT JOIN wa_cand wc ON wc.execution_candidate_id = ac.EXECUTION_CANDIDATE_ID
 ),
 daily AS (
     SELECT
@@ -1235,63 +998,6 @@ ct_events AS (
       AND JSON_EXTRACT_PATH_TEXT(PROPERTIES, 'execution_id') != ''
     GROUP BY 1
 ),
-cand_csp AS (
-    SELECT DISTINCT
-        ac.EXECUTION_CANDIDATE_ID AS execution_candidate_id,
-        ca.MOBILE_NUMBER AS csp_mobile
-    FROM all_candidates ac
-    JOIN PROD_DB.CSP_DEMAND_ALLOCATION_SERVICE_CSP_DEMAND_ALLOCATION_SERVICE.CONNECTION_ALLOCATIONS a
-        ON a.CONNECTION_ID = ac.CONNECTION_ID
-        AND a.ALLOCATION_STATE IN ('ASSIGNED','ACCEPTED','ACTIVE','RELEASED')
-    JOIN PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT ca
-        ON ca.csp_id = a.CSP_ID
-),
-cand_creation AS (
-    SELECT execution_candidate_id,
-        MIN(_FIVETRAN_START) AS cand_created_at
-    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES
-    WHERE execution_candidate_id IN (SELECT EXECUTION_CANDIDATE_ID FROM all_candidates)
-    GROUP BY 1
-),
-cand_window AS (
-    SELECT
-        cc.execution_candidate_id,
-        cc.csp_mobile,
-        cr.cand_created_at,
-        LEAD(cr.cand_created_at) OVER (
-            PARTITION BY cc.csp_mobile ORDER BY cr.cand_created_at
-        ) AS next_cand_at
-    FROM cand_csp cc
-    JOIN cand_creation cr ON cc.execution_candidate_id = cr.execution_candidate_id
-),
-wa_raw AS (
-    SELECT
-        event_type,
-        timestamp        AS wa_ts,
-        RIGHT(DEST_ADDR, 10) AS csp_mobile_10
-    FROM GUPSHUP_EVENTS
-    WHERE HSM_TEMPLATE_ID = '8759388'
-        AND event_type IN ('SENT', 'DELIVERED')
-        AND DATE(timestamp) >= CURRENT_DATE - 30
-),
-wa_attributed AS (
-    SELECT
-        cw.execution_candidate_id,
-        wr.event_type
-    FROM wa_raw wr
-    JOIN cand_window cw
-        ON RIGHT(cw.csp_mobile, 10) = wr.csp_mobile_10
-        AND wr.wa_ts >= cw.cand_created_at
-        AND (cw.next_cand_at IS NULL OR wr.wa_ts < cw.next_cand_at)
-),
-wa_cand AS (
-    SELECT
-        execution_candidate_id,
-        MAX(CASE WHEN event_type = 'SENT'      THEN 1 ELSE 0 END) AS wa_sent,
-        MAX(CASE WHEN event_type = 'DELIVERED' THEN 1 ELSE 0 END) AS wa_delivered
-    FROM wa_attributed
-    GROUP BY 1
-),
 candidate_level AS (
     SELECT
         ac.booking_date,
@@ -1300,8 +1006,6 @@ candidate_level AS (
         CASE WHEN COALESCE(ct.pn_delivered,0)=1 AND COALESCE(ct.pn_clicked,0)=1         THEN 1 ELSE 0 END AS pn_clicked,
         COALESCE(ct.fpn_delivered, 0)                                                                     AS fpn_delivered,
         CASE WHEN COALESCE(ct.fpn_delivered,0)=1 AND COALESCE(ct.fpn_action_taken,0)=1  THEN 1 ELSE 0 END AS fpn_action_taken,
-        COALESCE(wc.wa_sent, 0)                                                                           AS wa_sent,
-        COALESCE(wc.wa_delivered, 0)                                                                      AS wa_delivered,
         COALESCE(ct.install_candidate_opened, 0)                                                          AS drilldown_open,
         CASE WHEN COALESCE(ct.fpn_delivered,0)=1
               OR  COALESCE(ct.install_candidate_opened,0)=1
@@ -1335,7 +1039,6 @@ candidate_level AS (
               AND ac.CURRENT_STATE = 'CANCELLED_BY_UPSTREAM' THEN 1 ELSE 0 END AS p74_timeout
     FROM all_candidates ac
     LEFT JOIN ct_events ct ON ct.execution_id = ac.EXECUTION_CANDIDATE_ID
-    LEFT JOIN wa_cand   wc ON wc.execution_candidate_id = ac.EXECUTION_CANDIDATE_ID
 ),
 daily_cand AS (
     SELECT
@@ -1461,63 +1164,6 @@ ct_events AS (
       AND JSON_EXTRACT_PATH_TEXT(PROPERTIES, 'execution_id') != ''
     GROUP BY 1
 ),
-cand_csp AS (
-    SELECT DISTINCT
-        ac.EXECUTION_CANDIDATE_ID AS execution_candidate_id,
-        ca.MOBILE_NUMBER AS csp_mobile
-    FROM all_candidates ac
-    JOIN PROD_DB.CSP_DEMAND_ALLOCATION_SERVICE_CSP_DEMAND_ALLOCATION_SERVICE.CONNECTION_ALLOCATIONS a
-        ON a.CONNECTION_ID = ac.CONNECTION_ID
-        AND a.ALLOCATION_STATE IN ('ASSIGNED','ACCEPTED','ACTIVE','RELEASED')
-    JOIN PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT ca
-        ON ca.csp_id = a.CSP_ID
-),
-cand_creation AS (
-    SELECT execution_candidate_id,
-        MIN(_FIVETRAN_START) AS cand_created_at
-    FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES
-    WHERE execution_candidate_id IN (SELECT EXECUTION_CANDIDATE_ID FROM all_candidates)
-    GROUP BY 1
-),
-cand_window AS (
-    SELECT
-        cc.execution_candidate_id,
-        cc.csp_mobile,
-        cr.cand_created_at,
-        LEAD(cr.cand_created_at) OVER (
-            PARTITION BY cc.csp_mobile ORDER BY cr.cand_created_at
-        ) AS next_cand_at
-    FROM cand_csp cc
-    JOIN cand_creation cr ON cc.execution_candidate_id = cr.execution_candidate_id
-),
-wa_raw AS (
-    SELECT
-        event_type,
-        timestamp        AS wa_ts,
-        RIGHT(DEST_ADDR, 10) AS csp_mobile_10
-    FROM GUPSHUP_EVENTS
-    WHERE HSM_TEMPLATE_ID = '8759388'
-        AND event_type IN ('SENT', 'DELIVERED')
-        AND DATE(timestamp) >= CURRENT_DATE - 30
-),
-wa_attributed AS (
-    SELECT
-        cw.execution_candidate_id,
-        wr.event_type
-    FROM wa_raw wr
-    JOIN cand_window cw
-        ON RIGHT(cw.csp_mobile, 10) = wr.csp_mobile_10
-        AND wr.wa_ts >= cw.cand_created_at
-        AND (cw.next_cand_at IS NULL OR wr.wa_ts < cw.next_cand_at)
-),
-wa_cand AS (
-    SELECT
-        execution_candidate_id,
-        MAX(CASE WHEN event_type = 'SENT'      THEN 1 ELSE 0 END) AS wa_sent,
-        MAX(CASE WHEN event_type = 'DELIVERED' THEN 1 ELSE 0 END) AS wa_delivered
-    FROM wa_attributed
-    GROUP BY 1
-),
 candidate_level AS (
     SELECT
         ac.booking_date,
@@ -1526,8 +1172,6 @@ candidate_level AS (
         CASE WHEN COALESCE(ct.pn_delivered,0)=1 AND COALESCE(ct.pn_clicked,0)=1         THEN 1 ELSE 0 END AS pn_clicked,
         COALESCE(ct.fpn_delivered, 0)                                                                     AS fpn_delivered,
         CASE WHEN COALESCE(ct.fpn_delivered,0)=1 AND COALESCE(ct.fpn_action_taken,0)=1  THEN 1 ELSE 0 END AS fpn_action_taken,
-        COALESCE(wc.wa_sent, 0)                                                                           AS wa_sent,
-        COALESCE(wc.wa_delivered, 0)                                                                      AS wa_delivered,
         COALESCE(ct.install_candidate_opened, 0)                                                          AS drilldown_open,
         CASE WHEN COALESCE(ct.fpn_delivered,0)=1
               OR  COALESCE(ct.install_candidate_opened,0)=1
@@ -1561,7 +1205,6 @@ candidate_level AS (
               AND ac.CURRENT_STATE = 'CANCELLED_BY_UPSTREAM' THEN 1 ELSE 0 END AS p74_timeout
     FROM all_candidates ac
     LEFT JOIN ct_events ct ON ct.execution_id = ac.EXECUTION_CANDIDATE_ID
-    LEFT JOIN wa_cand   wc ON wc.execution_candidate_id = ac.EXECUTION_CANDIDATE_ID
 ),
 daily_cand AS (
     SELECT
