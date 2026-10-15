@@ -2827,10 +2827,45 @@ q3 AS (
     FULL OUTER JOIN t2_daily ON t1_daily.dt = t2_daily.dt
     LEFT JOIN matched ON matched.dt = COALESCE(t1_daily.dt, t2_daily.dt)
 ),
+sd_orders AS (
+    SELECT REQUEST_ID, CSP_ID, STATUS, CREATED_AT,
+           CONVERT_TIMEZONE('Asia/Kolkata', CREATED_AT)::DATE AS order_dt,
+           COALESCE(TOP_UP_AMOUNT_PAISE, 0) / 100             AS due_rs
+    FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.DEVICE_ORDERS
+    WHERE CREATED_AT >= DATEADD('day', -12, CURRENT_DATE)
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY REQUEST_ID ORDER BY VERSION DESC) = 1
+),
+sd_deposits AS (
+    SELECT CSP_ID, AMOUNT / 100 AS amt_rs, CREATED_AT
+    FROM PROD_DB.CSP_PAYMENT_SETTLEMENT_SERVICE_CSP_PAYMENT_SETTLEMENT_SERVICE.DEPOSIT_LEDGER_ENTRIES
+    WHERE _FIVETRAN_ACTIVE AND ENTRY_TYPE IN ('SECURITY_FROM_WALLET', 'SECURITY_PAID')
+      AND CREATED_AT >= DATEADD('day', -13, CURRENT_DATE)
+),
+sd_check AS (
+    SELECT o.REQUEST_ID, o.order_dt, o.due_rs, COALESCE(SUM(d.amt_rs), 0) AS charged_rs
+    FROM sd_orders o
+    LEFT JOIN sd_deposits d ON d.CSP_ID = o.CSP_ID AND ABS(DATEDIFF('second', d.CREATED_AT, o.CREATED_AT)) <= 300
+    WHERE o.STATUS <> 'REJECTED' AND o.order_dt BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1
+    GROUP BY 1, 2, 3
+),
+q4 AS (
+    SELECT order_dt AS dt, 'SD Error in Ordering Flow (Total Orders | Orders with SD Mismatch)' AS metric,
+        COUNT(*) AS total, COUNT_IF(charged_rs <> due_rs) AS matched
+    FROM sd_check GROUP BY 1
+    UNION ALL
+    SELECT order_dt, 'SD Error in Ordering Flow - Charged MORE than Due (Total Orders | Orders)',
+        COUNT(*), COUNT_IF(charged_rs > due_rs)
+    FROM sd_check GROUP BY 1
+    UNION ALL
+    SELECT order_dt, 'SD Error in Ordering Flow - Charged LESS than Due (Total Orders | Orders)',
+        COUNT(*), COUNT_IF(charged_rs < due_rs)
+    FROM sd_check GROUP BY 1
+),
 all_metrics AS (
     SELECT * FROM q1
     UNION ALL SELECT * FROM q2
     UNION ALL SELECT * FROM q3
+    UNION ALL SELECT * FROM q4
 )
 SELECT
     metric,
@@ -2944,10 +2979,40 @@ q3 AS (
     FULL OUTER JOIN t2_daily ON t1_daily.dt = t2_daily.dt
     LEFT JOIN matched ON matched.dt = COALESCE(t1_daily.dt, t2_daily.dt)
 ),
+sd_orders AS (
+    -- latest version of each order; SD is collected at the moment the order is placed
+    SELECT REQUEST_ID, CSP_ID, STATUS, CREATED_AT,
+           CONVERT_TIMEZONE('Asia/Kolkata', CREATED_AT)::DATE AS order_dt,
+           COALESCE(TOP_UP_AMOUNT_PAISE, 0) / 100             AS due_rs
+    FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.DEVICE_ORDERS
+    WHERE CREATED_AT >= DATEADD('day', -12, CURRENT_DATE)
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY REQUEST_ID ORDER BY VERSION DESC) = 1
+),
+sd_deposits AS (
+    SELECT CSP_ID, AMOUNT / 100 AS amt_rs, CREATED_AT
+    FROM PROD_DB.CSP_PAYMENT_SETTLEMENT_SERVICE_CSP_PAYMENT_SETTLEMENT_SERVICE.DEPOSIT_LEDGER_ENTRIES
+    WHERE _FIVETRAN_ACTIVE AND ENTRY_TYPE IN ('SECURITY_FROM_WALLET', 'SECURITY_PAID')
+      AND CREATED_AT >= DATEADD('day', -13, CURRENT_DATE)
+),
+sd_check AS (
+    -- due = top-up the ordering service recorded on the order; charged = deposit credited within 5 min of the order
+    SELECT o.REQUEST_ID, o.order_dt, o.due_rs, COALESCE(SUM(d.amt_rs), 0) AS charged_rs
+    FROM sd_orders o
+    LEFT JOIN sd_deposits d ON d.CSP_ID = o.CSP_ID AND ABS(DATEDIFF('second', d.CREATED_AT, o.CREATED_AT)) <= 300
+    WHERE o.STATUS <> 'REJECTED' AND o.order_dt BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1
+    GROUP BY 1, 2, 3
+),
+q4 AS (
+    SELECT order_dt AS dt,
+        'SD Error in Ordering Flow (% of Orders where SD Charged ≠ SD Due)' AS metric,
+        ROUND(100.0 * COUNT_IF(charged_rs <> due_rs) / NULLIF(COUNT(*), 0), 2) AS pct
+    FROM sd_check GROUP BY 1
+),
 all_metrics AS (
     SELECT * FROM q1
     UNION ALL SELECT * FROM q2
     UNION ALL SELECT * FROM q3
+    UNION ALL SELECT * FROM q4
 )
 SELECT
     metric,

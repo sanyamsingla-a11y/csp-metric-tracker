@@ -1251,7 +1251,9 @@ function buildTableHtml(rows, cols, pct, clickable, redHighlight) {
     cols.forEach(c => {
       const v = row[c] ?? row[c.toUpperCase()] ?? '';
       const numV = parseFloat(v);
-      const redStyle = (redHighlight && !isNaN(numV) && numV < 99) ? ' style="color:#e53e3e;font-weight:600"' : '';
+      // error-rate rows are lower-is-better: red above 0, not below 99
+      const isErrorRow = /^SD Error/.test(name);
+      const redStyle = (redHighlight && !isNaN(numV) && (isErrorRow ? numV > 0 : numV < 99)) ? ' style="color:#e53e3e;font-weight:600"' : '';
       html += '<td' + redStyle + '>' + fmt(v) + (pct && v !== null && v !== undefined && v !== '' ? '%' : '') + '</td>';
     });
     html += '</tr>';
