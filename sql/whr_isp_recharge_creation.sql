@@ -1,10 +1,12 @@
-with RECURSIVE date_cte AS
+with date_cte AS
 (
-    SELECT DATE '2026-07-01' AS dt
-    UNION ALL
-    SELECT DATEADD(DAY, 1, dt)
-    FROM date_cte
-    WHERE dt < CURRENT_DATE()+2
+    SELECT DATEADD(
+        DAY,
+        ROW_NUMBER() OVER (ORDER BY SEQ4()) - 1,
+        DATE '2026-07-01'
+    ) AS dt
+    FROM TABLE(GENERATOR(ROWCOUNT => 10000))
+    QUALIFY dt <= DATEADD(DAY, 2, CURRENT_DATE())
 )
 ,
 trum AS
