@@ -2830,37 +2830,44 @@ q3 AS (
     LEFT JOIN matched ON matched.dt = COALESCE(t1_daily.dt, t2_daily.dt)
 ),
 sd_orders AS (
+    -- latest version of each order; cap = boxes ordered x Rs 200 (default SD per box)
     SELECT REQUEST_ID, CSP_ID, STATUS, CREATED_AT,
            CONVERT_TIMEZONE('Asia/Kolkata', CREATED_AT)::DATE AS order_dt,
-           COALESCE(TOP_UP_AMOUNT_PAISE, 0) / 100             AS due_rs
+           COALESCE(TOP_UP_AMOUNT_PAISE, 0) / 100             AS due_rs,
+           COALESCE(QUANTITY_REQUESTED, 0) * 200              AS cap_rs
     FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.DEVICE_ORDERS
-    WHERE CREATED_AT >= DATEADD('day', -12, CURRENT_DATE)
+    WHERE CREATED_AT >= DATEADD('day', -22, CURRENT_DATE)
     QUALIFY ROW_NUMBER() OVER (PARTITION BY REQUEST_ID ORDER BY VERSION DESC) = 1
 ),
 sd_deposits AS (
-    SELECT CSP_ID, AMOUNT / 100 AS amt_rs, CREATED_AT
+    SELECT ID, CSP_ID, AMOUNT / 100 AS amt_rs, CREATED_AT
     FROM PROD_DB.CSP_PAYMENT_SETTLEMENT_SERVICE_CSP_PAYMENT_SETTLEMENT_SERVICE.DEPOSIT_LEDGER_ENTRIES
     WHERE _FIVETRAN_ACTIVE AND ENTRY_TYPE IN ('SECURITY_FROM_WALLET', 'SECURITY_PAID')
-      AND CREATED_AT >= DATEADD('day', -13, CURRENT_DATE)
+      AND CREATED_AT >= DATEADD('day', -23, CURRENT_DATE)
+),
+sd_pay_owner AS (
+    -- each deposit credit belongs to the first order the CSP placed from 5 min before it up to 7 days after it
+    SELECT d.ID, d.amt_rs, o.REQUEST_ID
+    FROM sd_deposits d
+    JOIN sd_orders o ON o.CSP_ID = d.CSP_ID
+     AND o.CREATED_AT >= DATEADD('second', -300, d.CREATED_AT)
+     AND o.CREATED_AT <= DATEADD('day', 7, d.CREATED_AT)
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY d.ID ORDER BY o.CREATED_AT) = 1
 ),
 sd_check AS (
-    SELECT o.REQUEST_ID, o.order_dt, o.due_rs, COALESCE(SUM(d.amt_rs), 0) AS charged_rs
+    SELECT o.REQUEST_ID, o.order_dt, o.due_rs, o.cap_rs, COALESCE(SUM(p.amt_rs), 0) AS charged_rs
     FROM sd_orders o
-    LEFT JOIN sd_deposits d ON d.CSP_ID = o.CSP_ID AND ABS(DATEDIFF('second', d.CREATED_AT, o.CREATED_AT)) <= 300
+    LEFT JOIN sd_pay_owner p ON p.REQUEST_ID = o.REQUEST_ID
     WHERE o.STATUS <> 'REJECTED' AND o.order_dt BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1
-    GROUP BY 1, 2, 3
+    GROUP BY 1, 2, 3, 4
 ),
 q4 AS (
-    SELECT order_dt AS dt, 'SD Error in Ordering Flow (Total Orders | Orders with SD Mismatch)' AS metric,
-        COUNT(*) AS total, COUNT_IF(charged_rs <> due_rs) AS matched
+    SELECT order_dt AS dt, 'SD Error in Ordering Flow - Charged MORE than Boxes x Rs 200 (Total Orders | Orders)' AS metric,
+        COUNT(*) AS total, COUNT_IF(charged_rs > cap_rs) AS matched
     FROM sd_check GROUP BY 1
     UNION ALL
-    SELECT order_dt, 'SD Error in Ordering Flow - Charged MORE than Due (Total Orders | Orders)',
-        COUNT(*), COUNT_IF(charged_rs > due_rs)
-    FROM sd_check GROUP BY 1
-    UNION ALL
-    SELECT order_dt, 'SD Error in Ordering Flow - Charged LESS than Due (Total Orders | Orders)',
-        COUNT(*), COUNT_IF(charged_rs < due_rs)
+    SELECT order_dt, 'SD Error in Ordering Flow - Top-up Due but No Payment Found (Total Orders | Orders)',
+        COUNT(*), COUNT_IF(due_rs > 0 AND charged_rs = 0)
     FROM sd_check GROUP BY 1
 ),
 all_metrics AS (
@@ -2982,32 +2989,48 @@ q3 AS (
     LEFT JOIN matched ON matched.dt = COALESCE(t1_daily.dt, t2_daily.dt)
 ),
 sd_orders AS (
-    -- latest version of each order; SD is collected at the moment the order is placed
+    -- latest version of each order; cap = boxes ordered x Rs 200 (default SD per box)
     SELECT REQUEST_ID, CSP_ID, STATUS, CREATED_AT,
            CONVERT_TIMEZONE('Asia/Kolkata', CREATED_AT)::DATE AS order_dt,
-           COALESCE(TOP_UP_AMOUNT_PAISE, 0) / 100             AS due_rs
+           COALESCE(TOP_UP_AMOUNT_PAISE, 0) / 100             AS due_rs,
+           COALESCE(QUANTITY_REQUESTED, 0) * 200              AS cap_rs
     FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.DEVICE_ORDERS
-    WHERE CREATED_AT >= DATEADD('day', -12, CURRENT_DATE)
+    WHERE CREATED_AT >= DATEADD('day', -22, CURRENT_DATE)
     QUALIFY ROW_NUMBER() OVER (PARTITION BY REQUEST_ID ORDER BY VERSION DESC) = 1
 ),
 sd_deposits AS (
-    SELECT CSP_ID, AMOUNT / 100 AS amt_rs, CREATED_AT
+    SELECT ID, CSP_ID, AMOUNT / 100 AS amt_rs, CREATED_AT
     FROM PROD_DB.CSP_PAYMENT_SETTLEMENT_SERVICE_CSP_PAYMENT_SETTLEMENT_SERVICE.DEPOSIT_LEDGER_ENTRIES
     WHERE _FIVETRAN_ACTIVE AND ENTRY_TYPE IN ('SECURITY_FROM_WALLET', 'SECURITY_PAID')
-      AND CREATED_AT >= DATEADD('day', -13, CURRENT_DATE)
+      AND CREATED_AT >= DATEADD('day', -23, CURRENT_DATE)
+),
+sd_pay_owner AS (
+    -- each deposit credit belongs to the first order the CSP placed from 5 min before it up to 7 days after it
+    SELECT d.ID, d.amt_rs, o.REQUEST_ID
+    FROM sd_deposits d
+    JOIN sd_orders o ON o.CSP_ID = d.CSP_ID
+     AND o.CREATED_AT >= DATEADD('second', -300, d.CREATED_AT)
+     AND o.CREATED_AT <= DATEADD('day', 7, d.CREATED_AT)
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY d.ID ORDER BY o.CREATED_AT) = 1
 ),
 sd_check AS (
-    -- due = top-up the ordering service recorded on the order; charged = deposit credited within 5 min of the order
-    SELECT o.REQUEST_ID, o.order_dt, o.due_rs, COALESCE(SUM(d.amt_rs), 0) AS charged_rs
+    -- charged = deposit credits owned by the order; error 1 = charged above boxes x Rs 200,
+    -- error 2 = ordering service recorded a top-up due but no payment was found
+    SELECT o.REQUEST_ID, o.order_dt, o.due_rs, o.cap_rs, COALESCE(SUM(p.amt_rs), 0) AS charged_rs
     FROM sd_orders o
-    LEFT JOIN sd_deposits d ON d.CSP_ID = o.CSP_ID AND ABS(DATEDIFF('second', d.CREATED_AT, o.CREATED_AT)) <= 300
+    LEFT JOIN sd_pay_owner p ON p.REQUEST_ID = o.REQUEST_ID
     WHERE o.STATUS <> 'REJECTED' AND o.order_dt BETWEEN CURRENT_DATE - 8 AND CURRENT_DATE - 1
-    GROUP BY 1, 2, 3
+    GROUP BY 1, 2, 3, 4
 ),
 q4 AS (
     SELECT order_dt AS dt,
-        'SD Error in Ordering Flow (% of Orders where SD Charged ≠ SD Due)' AS metric,
-        ROUND(100.0 * COUNT_IF(charged_rs <> due_rs) / NULLIF(COUNT(*), 0), 2) AS pct
+        'SD Error in Ordering Flow (% of Orders Charged MORE than Boxes x Rs 200)' AS metric,
+        ROUND(100.0 * COUNT_IF(charged_rs > cap_rs) / NULLIF(COUNT(*), 0), 2) AS pct
+    FROM sd_check GROUP BY 1
+    UNION ALL
+    SELECT order_dt,
+        'SD Error in Ordering Flow - Top-up Due but No Payment Found (% of Orders)',
+        ROUND(100.0 * COUNT_IF(due_rs > 0 AND charged_rs = 0) / NULLIF(COUNT(*), 0), 2)
     FROM sd_check GROUP BY 1
 ),
 all_metrics AS (
