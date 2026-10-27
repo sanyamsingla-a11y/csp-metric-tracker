@@ -343,8 +343,7 @@ candidate_level AS (
     -- attention uses PN + FPN only (GUPSHUP_EVENTS removed)
     CASE WHEN COALESCE(ct.pn_delivered,0)=1 OR COALESCE(ct.fpn_delivered,0)=1
          THEN 1 ELSE 0 END            AS attention_delivered,
-    CASE WHEN COALESCE(ct.fpn_delivered,0)=1 OR COALESCE(ct.drilldown_opened,0)=1 OR COALESCE(wc.wa_delivered,0)=1
-         THEN 1 ELSE 0 END            AS install_task_open,
+    CASE WHEN COALESCE(ct.fpn_delivered,0)=1 OR COALESCE(ct.drilldown_opened,0)=1 THEN 1 ELSE 0 END            AS install_task_open,
     CASE WHEN ac.proposed_slot_date IS NOT NULL THEN 1 ELSE 0 END AS slot_proposed,
     CASE WHEN ac.current_state = 'DECLINED'     THEN 1 ELSE 0 END AS slot_declined,
     CASE WHEN st.awaiting_slot_at IS NOT NULL
@@ -633,8 +632,7 @@ candidate_level AS (
               OR COALESCE(ct.fpn_delivered,0)=1      THEN 1 ELSE 0 END AS task_attention,
         COALESCE(ct.install_candidate_opened, 0)    AS drilldown_open,
         CASE WHEN COALESCE(ct.fpn_delivered,0)=1
-              OR COALESCE(ct.install_candidate_opened,0)=1
-              OR COALESCE(wc.wa_delivered,0)=1      THEN 1 ELSE 0 END AS install_task_open,
+              OR COALESCE(ct.install_candidate_opened,0)=1 THEN 1 ELSE 0 END AS install_task_open,
         CASE WHEN ac.PROPOSED_SLOT_DATE IS NOT NULL THEN 1 ELSE 0 END AS slot_proposed,
         CASE WHEN (
             (st.slot_proposed_at IS NULL
@@ -702,8 +700,6 @@ daily_cand AS (
         SUM(fpn_sent)                  AS fpn_sent,
         SUM(fpn_delivered)             AS fpn_delivered,
         SUM(fpn_action_taken)          AS fpn_action_taken,
-        SUM(wa_sent)                   AS wa_sent,
-        SUM(wa_delivered)              AS wa_delivered,
         SUM(task_attention)            AS task_attention,
         SUM(drilldown_open)            AS drilldown_open,
         SUM(install_task_open)         AS install_task_open,
@@ -747,8 +743,6 @@ rates_joined AS (
         cd.pn_delivered   * 1.0 / NULLIF(cd.pn_sent, 0)                  AS pn_delivery_rate,
         cd.fpn_sent       * 1.0 / NULLIF(cd.total_candidates, 0)         AS fpn_sent_rate,
         cd.fpn_delivered  * 1.0 / NULLIF(cd.fpn_sent, 0)                 AS fpn_delivery_rate,
-        cd.wa_sent        * 1.0 / NULLIF(cd.total_candidates, 0)        AS wa_sent_rate,
-        cd.wa_delivered   * 1.0 / NULLIF(cd.wa_sent, 0)                 AS wa_delivery_rate,
         cd.task_attention * 1.0 / NULLIF(cd.total_candidates, 0)         AS task_reach_rate,
         cd.p41_timeout    * 1.0 / NULLIF(cd.p41_eligible, 0)             AS p41_timeout_rate,
         cd.slot_remind_sent * 1.0 / NULLIF(cd.no_slot_within_1h, 0)      AS slot_remind_rate,
@@ -768,8 +762,6 @@ rates_long AS (
     UNION ALL SELECT 6,  'Install PN Delivery Rate',        booking_date, pn_delivery_rate            FROM rates_joined
     UNION ALL SELECT 7,  'FPN Sent Rate',                   booking_date, fpn_sent_rate               FROM rates_joined
     UNION ALL SELECT 8,  'FPN Delivery Rate',               booking_date, fpn_delivery_rate           FROM rates_joined
-    UNION ALL SELECT 9,  'WA Sent Rate',                    booking_date, wa_sent_rate                FROM rates_joined
-    UNION ALL SELECT 10, 'WA Delivery Rate',                booking_date, wa_delivery_rate            FROM rates_joined
     UNION ALL SELECT 11, 'Task Attention Rate',              booking_date, task_reach_rate             FROM rates_joined
     UNION ALL SELECT 12, 'P41 Timeout Rate',                booking_date, p41_timeout_rate            FROM rates_joined
     UNION ALL SELECT 13, 'Tech Assigned (not self) Rate',   booking_date, tech_not_self_rate          FROM rates_joined
@@ -904,8 +896,7 @@ candidate_level AS (
     SELECT
         ac.booking_date AS dt,
         CASE WHEN COALESCE(ct.fpn_delivered,0)=1
-              OR  COALESCE(ct.install_candidate_opened,0)=1
-              OR  COALESCE(wc.wa_delivered,0)=1 THEN 1 ELSE 0 END AS install_task_open,
+              OR  COALESCE(ct.install_candidate_opened,0)=1 THEN 1 ELSE 0 END AS install_task_open,
         CASE WHEN ac.CURRENT_STATE = 'DECLINED' THEN 1 ELSE 0 END AS slot_declined,
         CASE WHEN ac.EXECUTOR_ID IS NOT NULL THEN 1 ELSE 0 END AS tech_assigned,
         CASE WHEN COALESCE(ac.COMPLETED_STEP,0) >= 1 THEN 1 ELSE 0 END AS step_selfie,
@@ -1008,8 +999,7 @@ candidate_level AS (
         CASE WHEN COALESCE(ct.fpn_delivered,0)=1 AND COALESCE(ct.fpn_action_taken,0)=1  THEN 1 ELSE 0 END AS fpn_action_taken,
         COALESCE(ct.install_candidate_opened, 0)                                                          AS drilldown_open,
         CASE WHEN COALESCE(ct.fpn_delivered,0)=1
-              OR  COALESCE(ct.install_candidate_opened,0)=1
-              OR  COALESCE(wc.wa_delivered,0)=1                                          THEN 1 ELSE 0 END AS install_task_open,
+              OR  COALESCE(ct.install_candidate_opened,0)=1 THEN 1 ELSE 0 END AS install_task_open,
         CASE WHEN ac.CURRENT_STATE = 'DECLINED'       THEN 1 ELSE 0 END AS slot_declined,
         CASE WHEN ac.PROPOSED_SLOT_DATE IS NOT NULL   THEN 1 ELSE 0 END AS slot_proposed,
         CASE WHEN ac.CONFIRMED_SLOT_AT IS NOT NULL    THEN 1 ELSE 0 END AS slot_confirmed,
@@ -1049,8 +1039,6 @@ daily_cand AS (
         SUM(pn_clicked)           AS pn_clicked,
         SUM(fpn_delivered)        AS fpn_delivered,
         SUM(fpn_action_taken)     AS fpn_action_taken,
-        SUM(wa_sent)              AS wa_sent,
-        SUM(wa_delivered)         AS wa_delivered,
         SUM(drilldown_open)       AS drilldown_open,
         SUM(install_task_open)    AS install_task_open,
         SUM(slot_declined)        AS slot_declined,
@@ -1082,8 +1070,6 @@ counts_long AS (
     UNION ALL SELECT  3, '# PN Clicked',              booking_date, pn_clicked          FROM daily_cand
     UNION ALL SELECT  4, '# FPN Delivered',           booking_date, fpn_delivered       FROM daily_cand
     UNION ALL SELECT  5, '# FPN Action Taken',        booking_date, fpn_action_taken    FROM daily_cand
-    UNION ALL SELECT  6, '# WA Sent',                 booking_date, wa_sent             FROM daily_cand
-    UNION ALL SELECT  7, '# WA Delivered',             booking_date, wa_delivered        FROM daily_cand
     UNION ALL SELECT  8, '# Drilldown Open',          booking_date, drilldown_open      FROM daily_cand
     UNION ALL SELECT  9, '# Install Task Open',       booking_date, install_task_open   FROM daily_cand
     UNION ALL SELECT 10, '# Slot Declined',           booking_date, slot_declined       FROM daily_cand
@@ -1174,8 +1160,7 @@ candidate_level AS (
         CASE WHEN COALESCE(ct.fpn_delivered,0)=1 AND COALESCE(ct.fpn_action_taken,0)=1  THEN 1 ELSE 0 END AS fpn_action_taken,
         COALESCE(ct.install_candidate_opened, 0)                                                          AS drilldown_open,
         CASE WHEN COALESCE(ct.fpn_delivered,0)=1
-              OR  COALESCE(ct.install_candidate_opened,0)=1
-              OR  COALESCE(wc.wa_delivered,0)=1                                          THEN 1 ELSE 0 END AS install_task_open,
+              OR  COALESCE(ct.install_candidate_opened,0)=1 THEN 1 ELSE 0 END AS install_task_open,
         CASE WHEN ac.CURRENT_STATE = 'DECLINED'       THEN 1 ELSE 0 END AS slot_declined,
         CASE WHEN ac.PROPOSED_SLOT_DATE IS NOT NULL   THEN 1 ELSE 0 END AS slot_proposed,
         CASE WHEN ac.CONFIRMED_SLOT_AT IS NOT NULL    THEN 1 ELSE 0 END AS slot_confirmed,
@@ -1215,8 +1200,6 @@ daily_cand AS (
         SUM(pn_clicked)           AS pn_clicked,
         SUM(fpn_delivered)        AS fpn_delivered,
         SUM(fpn_action_taken)     AS fpn_action_taken,
-        SUM(wa_sent)              AS wa_sent,
-        SUM(wa_delivered)         AS wa_delivered,
         SUM(drilldown_open)       AS drilldown_open,
         SUM(install_task_open)    AS install_task_open,
         SUM(slot_declined)        AS slot_declined,
@@ -1256,7 +1239,6 @@ rates_joined AS (
         slot_confirmed     * 1.0 / NULLIF(slot_proposed, 0)      AS slot_confirmed_rate,
         tech_assigned      * 1.0 / NULLIF(slot_confirmed, 0)     AS tech_assigned_rate,
         tech_assigned_not_self * 1.0 / NULLIF(slot_confirmed, 0) AS tech_not_self_rate,
-        wa_delivered       * 1.0 / NULLIF(wa_sent, 0)            AS wa_delivery_rate,
         step_selfie        * 1.0 / NULLIF(tech_assigned, 0)      AS arrival_rate,
         step_aadhaar       * 1.0 / NULLIF(step_selfie, 0)        AS aadhaar_rate,
         step_fee           * 1.0 / NULLIF(step_aadhaar, 0)       AS fee_rate,
@@ -1276,7 +1258,6 @@ rates_long AS (
     SELECT 1  AS sort_ord, 'Install PN Click Rate'                          AS metric, booking_date, pn_click_rate             AS rate FROM rates_joined
     UNION ALL SELECT 2,  'FPN Delivery Rate (/Task Created)',               booking_date, fpn_delivery_rate      FROM rates_joined
     UNION ALL SELECT 3,  'FPN Action Taken Rate (/FPN Delivered)',          booking_date, fpn_action_rate        FROM rates_joined
-    UNION ALL SELECT 4,  'WA Delivery Rate',                                booking_date, wa_delivery_rate       FROM rates_joined
     UNION ALL SELECT 5,  'Drilldown Open Rate',                             booking_date, drilldown_open_rate    FROM rates_joined
     UNION ALL SELECT 6,  'Task Open Rate',                                  booking_date, task_open_rate         FROM rates_joined
     UNION ALL SELECT 7,  'Response Rate ((Assigned+Declined)/Task Open)',   booking_date, response_rate          FROM rates_joined
