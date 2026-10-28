@@ -622,6 +622,8 @@ candidate_level AS (
     SELECT
         ac.booking_date,
         ac.execution_candidate_id,
+        -- maturity gate: CleverTap events lag, so candidates younger than 3h are left out of the sent/delivered rates
+        CASE WHEN ac.CREATED_AT <= DATEADD(hour, -3, CURRENT_TIMESTAMP) THEN 1 ELSE 0 END AS mature,
         COALESCE(ct.pn_sent_flag, 0)               AS pn_sent,
         COALESCE(ct.pn_delivered, 0)                AS pn_delivered,
         COALESCE(ct.pn_clicked, 0)                  AS pn_clicked,
@@ -661,14 +663,15 @@ candidate_level AS (
         CASE WHEN ac.CURRENT_STATE = 'CANCELLED_BY_CUSTOMER'   THEN 1 ELSE 0 END AS cancelled_by_customer,
         CASE WHEN ac.CURRENT_STATE = 'CANCELLED_BY_UPSTREAM'   THEN 1 ELSE 0 END AS cancelled_by_upstream,
         CASE WHEN ac.FAILURE_REASON IS NOT NULL                 THEN 1 ELSE 0 END AS install_failed,
+        -- P41 deadline must be >1h old so the timeout job has had time to fire
         CASE WHEN ac.PROPOSED_SLOT_DATE IS NULL
               AND ac.P41_DEADLINE_AT IS NOT NULL
-              AND ac.P41_DEADLINE_AT < CURRENT_TIMESTAMP
+              AND ac.P41_DEADLINE_AT < DATEADD(hour, -1, CURRENT_TIMESTAMP)
               AND ac.CURRENT_STATE NOT IN ('DECLINED','CANCELLED_BY_CUSTOMER')
              THEN 1 ELSE 0 END AS p41_eligible,
         CASE WHEN ac.PROPOSED_SLOT_DATE IS NULL
               AND ac.P41_DEADLINE_AT IS NOT NULL
-              AND ac.P41_DEADLINE_AT < CURRENT_TIMESTAMP
+              AND ac.P41_DEADLINE_AT < DATEADD(hour, -1, CURRENT_TIMESTAMP)
               AND ac.CURRENT_STATE = 'CANCELLED_BY_UPSTREAM'
              THEN 1 ELSE 0 END AS p41_timeout,
         CASE WHEN ac.P74_DEADLINE_AT IS NOT NULL
@@ -694,6 +697,14 @@ daily_cand AS (
     SELECT
         booking_date,
         COUNT(*)                       AS total_candidates,
+        SUM(mature)                    AS mature_candidates,
+        SUM(pn_sent * mature)          AS pn_sent_m,
+        SUM(pn_delivered * mature)     AS pn_delivered_m,
+        SUM(fpn_sent * mature)         AS fpn_sent_m,
+        SUM(fpn_delivered * mature)    AS fpn_delivered_m,
+        SUM(task_attention * mature)   AS task_attention_m,
+        SUM(tech_assigned * mature)    AS tech_assigned_m,
+        SUM(tech_pn_delivered * mature) AS tech_pn_delivered_m,
         SUM(pn_sent)                   AS pn_sent,
         SUM(pn_delivered)              AS pn_delivered,
         SUM(pn_clicked)                AS pn_clicked,
@@ -739,16 +750,16 @@ rates_joined AS (
         dc.das_cnt  * 1.0 / NULLIF(dc.clos_cnt, 0)                       AS conn_assigned_rate,
         dc.csp_with_csp_cnt * 1.0 / NULLIF(dc.das_cnt, 0)               AS csp_with_csp_rate,
         dc.tas_cnt  * 1.0 / NULLIF(dc.das_cnt, 0)                        AS task_creation_rate,
-        cd.pn_sent        * 1.0 / NULLIF(cd.total_candidates, 0)         AS pn_sent_rate,
-        cd.pn_delivered   * 1.0 / NULLIF(cd.pn_sent, 0)                  AS pn_delivery_rate,
-        cd.fpn_sent       * 1.0 / NULLIF(cd.total_candidates, 0)         AS fpn_sent_rate,
-        cd.fpn_delivered  * 1.0 / NULLIF(cd.fpn_sent, 0)                 AS fpn_delivery_rate,
-        cd.task_attention * 1.0 / NULLIF(cd.total_candidates, 0)         AS task_reach_rate,
+        cd.pn_sent_m        * 1.0 / NULLIF(cd.mature_candidates, 0)      AS pn_sent_rate,
+        cd.pn_delivered_m   * 1.0 / NULLIF(cd.pn_sent_m, 0)              AS pn_delivery_rate,
+        cd.fpn_sent_m       * 1.0 / NULLIF(cd.mature_candidates, 0)      AS fpn_sent_rate,
+        cd.fpn_delivered_m  * 1.0 / NULLIF(cd.fpn_sent_m, 0)             AS fpn_delivery_rate,
+        cd.task_attention_m * 1.0 / NULLIF(cd.mature_candidates, 0)      AS task_reach_rate,
         cd.p41_timeout    * 1.0 / NULLIF(cd.p41_eligible, 0)             AS p41_timeout_rate,
         cd.slot_remind_sent * 1.0 / NULLIF(cd.no_slot_within_1h, 0)      AS slot_remind_rate,
         cd.tech_assigned_not_self * 1.0 / NULLIF(cd.slot_confirmed, 0)   AS tech_not_self_rate,
         cd.tech_remind_sent * 1.0 / NULLIF(cd.slot_confirmed, 0)         AS tech_remind_rate,
-        cd.tech_pn_delivered * 1.0 / NULLIF(cd.tech_assigned, 0)         AS tech_pn_delivery_rate,
+        cd.tech_pn_delivered_m * 1.0 / NULLIF(cd.tech_assigned_m, 0)     AS tech_pn_delivery_rate,
         cd.p74_timeout      * 1.0 / NULLIF(cd.p74_eligible, 0)           AS p74_timeout_rate
     FROM daily_conn dc
     JOIN daily_cand cd ON cd.booking_date = dc.booking_date
