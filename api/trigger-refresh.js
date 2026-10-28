@@ -1,5 +1,5 @@
 // Vercel Cron → GitHub Actions workflow_dispatch trigger
-// Runs daily at 3 AM UTC (8:30 AM IST) via vercel.json cron
+// Runs daily at 5 AM UTC (10:30 AM IST) via vercel.json cron
 // Requires GITHUB_PAT env var in Vercel project settings (fine-grained token with Actions:write)
 
 export default async function handler(req, res) {

@@ -2,7 +2,7 @@ name: Daily Data Refresh
 
 on:
   schedule:
-    - cron: '0 3 * * *'   # 3:00 AM UTC = 8:30 AM IST
+    - cron: '0 5 * * *'   # 5:00 AM UTC = 10:30 AM IST (after the overnight PN delivery queue flushes)
   workflow_dispatch:       # manual trigger from GitHub UI
 
 permissions:
