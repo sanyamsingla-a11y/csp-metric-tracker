@@ -3,7 +3,7 @@ Refresh workflow dashboard data from Metabase.
 Run: python refresh_workflows.py
 """
 import json, urllib.request, os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -6592,7 +6592,7 @@ def _build_all_file_queries():
 
 def refresh(only_keys=None):
     """Refresh workflow data. If only_keys is set, only run those queries and merge into existing data."""
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M IST")
+    ts = datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d %H:%M IST")
 
     # ── For partial refresh, pull latest remote first to avoid stale keys ──
     out_path = os.path.join(DIR, "workflow_data.js")
