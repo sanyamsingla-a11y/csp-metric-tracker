@@ -46,22 +46,32 @@ retry_counts AS (
     WHERE NOT _fivetran_deleted
     GROUP BY withdrawal_id
 ),
+-- A failed payout can be reversed straight back to the wallet without ever
+-- writing a retry row (e.g. 11-Nov-2026 Razorpay 500s). The reversal is a
+-- WITHDRAWAL ledger entry carrying the debit's reference_id.
+reversals AS (
+    SELECT DISTINCT reference_id AS withdrawal_id
+    FROM csp_payment_settlement_service_csp_payment_settlement_service.wallet_ledger_entries
+    WHERE _fivetran_active
+      AND entry_type = 'WITHDRAWAL'
+),
 tagged AS (
     SELECT
         wd.debit_date,
         CASE
-            WHEN rl.withdrawal_id IS NULL                          THEN 'Payments Succeeded in 1st Attempt'
+            WHEN rl.withdrawal_id IS NULL AND rv.withdrawal_id IS NULL THEN 'Payments Succeeded in 1st Attempt'
             WHEN rc.retries = 1 AND rc.final_status = 'processed'  THEN 'Payments Succeeded in 2nd Attempt'
             WHEN rc.retries >= 2 AND rc.final_status = 'processed' THEN 'Payments Succeeded in 3+ Attempts'
         END AS metric,
         CASE
-            WHEN rl.withdrawal_id IS NULL                          THEN 1
+            WHEN rl.withdrawal_id IS NULL AND rv.withdrawal_id IS NULL THEN 1
             WHEN rc.retries = 1 AND rc.final_status = 'processed'  THEN 2
             WHEN rc.retries >= 2 AND rc.final_status = 'processed' THEN 3
         END AS sort_order
     FROM withdrawals wd
     LEFT JOIN retry_log rl ON rl.withdrawal_id = wd.withdrawal_id
     LEFT JOIN retry_counts rc ON rc.withdrawal_id = wd.withdrawal_id
+    LEFT JOIN reversals rv ON rv.withdrawal_id = wd.withdrawal_id
 ),
 period_totals AS (
     SELECT p.period_name, COUNT(*) AS total
