@@ -1,9 +1,10 @@
 name: Daily Data Refresh
 
 on:
-  schedule:
-    - cron: '0 5 * * *'   # 5:00 AM UTC = 10:30 AM IST (after the overnight PN delivery queue flushes)
-  workflow_dispatch:       # manual trigger from GitHub UI
+  # Triggered once a day by the Vercel cron (api/trigger-refresh.js, 05:00 UTC = 10:30 IST) via workflow_dispatch.
+  # The GitHub `schedule` trigger was removed 18-Nov: GitHub ran it hours late (12:00-14:00 UTC), so the full
+  # refresh ran TWICE a day. daily_refresh_backup.yml still covers a missed Vercel trigger.
+  workflow_dispatch:
 
 permissions:
   contents: write

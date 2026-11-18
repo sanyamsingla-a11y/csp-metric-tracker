@@ -1693,7 +1693,7 @@ with date_cte AS
     SELECT DATEADD(
         DAY,
         ROW_NUMBER() OVER (ORDER BY SEQ4()) - 1,
-        DATE '2026-06-01'
+        DATEADD(DAY, -120, CURRENT_DATE())   -- rolling: output needs only the last 30 due-dates; 120d verified identical to the old fixed 1-Jun start (18-Nov)
     ) AS dt
     FROM TABLE(GENERATOR(ROWCOUNT => 10000))
     QUALIFY dt <= DATEADD(DAY, 2, CURRENT_DATE())
@@ -6601,9 +6601,42 @@ def _build_all_file_queries():
     return d
 
 
+# ── Incremental daily-history queries ────────────────────────────
+# Past days don't change, so only the last N days are re-queried and merged with the rows already in
+# workflow_data.js. FULL_REFRESH=1 (or no previous rows) runs the full history once.
+INCREMENTAL = {
+    # key: (date column, start literal in the SQL, days to recompute)
+    "earnings_carry_fee_daily": ("DATE", "'2026-08-14'::DATE", 10),
+}
+
+
+def _load_existing(out_path):
+    try:
+        with open(out_path, encoding="utf-8") as f:
+            content = f.read()
+        start = content.index("const WORKFLOW_DATA = ") + len("const WORKFLOW_DATA = ")
+        return json.loads(content[start:content.rindex(";")])
+    except Exception:
+        return {}
+
+
+def _run_incremental(key, sql, prev_rows):
+    col, start_literal, days = INCREMENTAL[key]
+    if os.environ.get("FULL_REFRESH") == "1" or not prev_rows:
+        return mb_native(sql)
+    new_rows = mb_native(sql.replace(start_literal, f"DATEADD(day, -{days - 1}, CURRENT_DATE())"))
+    if not new_rows:
+        return prev_rows
+    cut = min(str(r[col])[:10] for r in new_rows)
+    kept = [r for r in prev_rows if str(r[col])[:10] < cut]
+    print(f"  -> incremental: kept {len(kept)} old rows, re-queried {len(new_rows)} from {cut}")
+    return kept + new_rows
+
+
 def refresh(only_keys=None):
     """Refresh workflow data. If only_keys is set, only run those queries and merge into existing data."""
     ts = datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d %H:%M IST")
+    prev = _load_existing(os.path.join(DIR, "workflow_data.js"))
 
     # ── For partial refresh, pull latest remote first to avoid stale keys ──
     out_path = os.path.join(DIR, "workflow_data.js")
@@ -6673,7 +6706,10 @@ def refresh(only_keys=None):
             continue
         print(f"  Querying {key}...")
         try:
-            rows = mb_native(_load_sql(filename))
+            if key in INCREMENTAL:
+                rows = _run_incremental(key, _load_sql(filename), prev.get(key) or [])
+            else:
+                rows = mb_native(_load_sql(filename))
             data[key] = rows
             print(f"  -> {len(rows)} rows")
         except Exception as e:

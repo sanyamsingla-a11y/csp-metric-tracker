@@ -3,7 +3,7 @@ with date_cte AS
     SELECT DATEADD(
         DAY,
         ROW_NUMBER() OVER (ORDER BY SEQ4()) - 1,
-        DATE '2026-07-01'
+        DATEADD(DAY, -45, DATEADD(MONTH, -3, DATE_TRUNC('MONTH', CURRENT_DATE())))   -- rolling: M-3 start minus 45d buffer; verified identical to the old fixed 1-Jul start (18-Nov)
     ) AS dt
     FROM TABLE(GENERATOR(ROWCOUNT => 10000))
     QUALIFY dt <= DATEADD(DAY, 2, CURRENT_DATE())
