@@ -1,10 +1,19 @@
 name: Daily Data Refresh
 
 on:
-  # Triggered once a day by the Vercel cron (api/trigger-refresh.js, 05:00 UTC = 10:30 IST) via workflow_dispatch.
+  # Triggered once a day by the Vercel cron (api/trigger-refresh.js, hour 05 UTC; Vercel fires it ~05:24 UTC) via
+  # workflow_dispatch, which passes start_not_before_ist=11:20 so the queries start at 11:20 IST: the clevertap_csp_api
+  # Fivetran sync starts at 11:00 IST and finishes by ~11:12, and starting earlier (it ran ~10:54) read CleverTap only up
+  # to 08:00 and understated every T-1 PN/FPN delivery rate (21-Nov: 70.7% shown vs 82.1% real).
   # The GitHub `schedule` trigger was removed 18-Nov: GitHub ran it hours late (12:00-14:00 UTC), so the full
   # refresh ran TWICE a day. daily_refresh_backup.yml still covers a missed Vercel trigger.
+  # A manual run (no input) starts at once.
   workflow_dispatch:
+    inputs:
+      start_not_before_ist:
+        description: 'Wait until this IST time (HH:MM) before refreshing; empty = start now'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -13,6 +22,21 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
+      - name: Wait for the 11:00 IST CleverTap sync
+        if: ${{ inputs.start_not_before_ist != '' }}
+        env:
+          START_IST: ${{ inputs.start_not_before_ist }}
+        run: |
+          ist_day=$(date -u -d '+330 minutes' +%F)
+          target=$(date -d "$ist_day $START_IST +0530" +%s)
+          now=$(date +%s)
+          if [ "$target" -gt "$now" ]; then
+            echo "Waiting $(( (target - now) / 60 )) min until $START_IST IST"
+            sleep $(( target - now ))
+          else
+            echo "Already past $START_IST IST, starting now"
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5

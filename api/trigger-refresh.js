@@ -1,5 +1,5 @@
 // Vercel Cron → GitHub Actions workflow_dispatch trigger
-// Runs daily at 5 AM UTC (10:30 AM IST) via vercel.json cron
+// Runs daily in hour 05 UTC via vercel.json cron (Vercel fires it ~05:24 UTC); the workflow then waits until 11:20 IST
 // Requires GITHUB_PAT env var in Vercel project settings (fine-grained token with Actions:write)
 
 export default async function handler(req, res) {
@@ -25,7 +25,8 @@ export default async function handler(req, res) {
           'Accept': 'application/vnd.github.v3+json',
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ ref: 'master' }),
+        // The workflow waits until 11:20 IST before querying, so the 11:00 IST CleverTap sync is in.
+        body: JSON.stringify({ ref: 'master', inputs: { start_not_before_ist: '11:20' } }),
       }
     );
 
